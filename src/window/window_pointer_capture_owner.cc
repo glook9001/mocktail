@@ -80,45 +80,21 @@ bool WindowPointerCaptureOwner::Pump(bool text_input_active) {
 
 bool WindowPointerCaptureOwner::OnRightButton(bool pressed,
                                               bool text_input_active) {
-  if (pressed && !right_button_held_) {
-    // nativeGetMainWindowIsMouseLockedCenter may start returning true as soon
-    // as Roblox receives RMB down. Remember only a lock observed before the
-    // drag so a stale post-release value cannot capture SDL again.
-    native_lock_was_active_before_right_drag_ =
-        native_lock_observed_ && !wait_for_native_unlock_after_right_drag_;
-    shift_key_pressed_during_right_drag_ = false;
-    discard_next_motion_after_right_drag_ = false;
-  } else if (!pressed && right_button_held_) {
-    const bool native_lock_should_survive_right_drag =
-        native_lock_was_active_before_right_drag_ ||
-        (shift_key_pressed_during_right_drag_ && native_lock_observed_);
-    const bool transient_right_drag = !native_lock_should_survive_right_drag;
-    wait_for_native_unlock_after_right_drag_ = transient_right_drag;
-    discard_next_motion_after_right_drag_ = transient_right_drag;
-    native_lock_was_active_before_right_drag_ = false;
-    shift_key_pressed_during_right_drag_ = false;
-  }
   right_button_held_ = focused_ && pressed;
   return Pump(text_input_active);
 }
 
 bool WindowPointerCaptureOwner::OnShiftKeyPressed(bool text_input_active) {
-  if (!focused_ || !right_button_held_) {
-    return true;
-  }
-  shift_key_pressed_during_right_drag_ = true;
   return Pump(text_input_active);
 }
 
 bool WindowPointerCaptureOwner::NeedsRightButtonReleaseRecovery(
-    bool observed_pressed) const {
-  return right_button_held_ && !observed_pressed;
+    bool /*observed_pressed*/) const {
+  return false;
 }
 
 bool WindowPointerCaptureOwner::ShouldDispatchMouseMotion() {
-  const bool discard_motion = discard_next_motion_after_right_drag_;
-  discard_next_motion_after_right_drag_ = false;
-  return !discard_motion && !wait_for_native_unlock_after_right_drag_;
+  return true;
 }
 
 bool WindowPointerCaptureOwner::OnFocusGained(bool text_input_active) {

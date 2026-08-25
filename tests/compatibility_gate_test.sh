@@ -39,13 +39,11 @@ if (( status == 0 )); then
   printf 'unknown payload unexpectedly succeeded\n%s\n' "${output}" >&2
   exit 1
 fi
-if ! rg --fixed-strings --quiet 'Unsupported Roblox Build ID' \
-    <<<"${output}"; then
+if ! grep -Fq 'Unsupported Roblox Build ID' <<<"${output}"; then
   printf 'missing fail-closed Build-ID diagnostic\n%s\n' "${output}" >&2
   exit 1
 fi
-if rg --fixed-strings --quiet \
-    'unknown Roblox fixture reached native loading' <<<"${output}"; then
+if grep -Fq 'unknown Roblox fixture reached native loading' <<<"${output}"; then
   printf 'unknown payload reached native loading\n%s\n' "${output}" >&2
   exit 1
 fi
