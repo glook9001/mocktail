@@ -17,10 +17,13 @@ temporary_root="$(mktemp -d)"
 trap 'rm -rf "${temporary_root}"' EXIT
 
 set +e
+mkdir -p "${temporary_root}/run"
 output="$(
   env -i \
     PATH="${PATH}" \
     HOME="${HOME}" \
+    XDG_RUNTIME_DIR="${temporary_root}/run" \
+    MOCKTAIL_ISOLATED_CANARY=1 \
     MOCKTAIL_ALLOW_NO_COOKIE_LUA_APP=1 \
     MOCKTAIL_CONFIG_ROOT="${temporary_root}/config" \
     MOCKTAIL_DATA_ROOT="${temporary_root}/data" \

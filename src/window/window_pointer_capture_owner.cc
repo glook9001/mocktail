@@ -67,10 +67,9 @@ bool WindowPointerCaptureOwner::Pump(bool text_input_active) {
   if (wait_for_native_unlock_after_right_drag_ && !native_lock_active) {
     wait_for_native_unlock_after_right_drag_ = false;
   }
-  const bool client_active = query_ok && focused_;
-  const bool native_capture_active = client_active && native_lock_active &&
-                                     !wait_for_native_unlock_after_right_drag_;
-  const bool right_drag_active = focused_ && right_button_held_;
+  const bool client_active = query_ok;
+  const bool native_capture_active = client_active && native_lock_active;
+  const bool right_drag_active = right_button_held_;
   const bool capture_requested =
       (right_drag_active || native_capture_active) && !text_input_active;
   const bool cursor_visible =
@@ -80,11 +79,15 @@ bool WindowPointerCaptureOwner::Pump(bool text_input_active) {
 
 bool WindowPointerCaptureOwner::OnRightButton(bool pressed,
                                               bool text_input_active) {
-  right_button_held_ = focused_ && pressed;
+  if (pressed) {
+    focused_ = true;
+  }
+  right_button_held_ = pressed;
   return Pump(text_input_active);
 }
 
 bool WindowPointerCaptureOwner::OnShiftKeyPressed(bool text_input_active) {
+  focused_ = true;
   return Pump(text_input_active);
 }
 

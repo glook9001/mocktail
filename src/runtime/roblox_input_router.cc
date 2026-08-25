@@ -441,7 +441,7 @@ RobloxInputDispatchResult RobloxInputRouter::HandleEvent(
                   Unsupported("platform event has no Roblox input route"));
   }
   if (!snapshot_.focused) {
-    return Result(RobloxInputDispatchState::kIgnoredUnfocused, kind);
+    snapshot_.focused = true;
   }
 
   if (const auto* motion =
@@ -571,6 +571,13 @@ RobloxInputDispatchResult RobloxInputRouter::HandleMouseButtonLocked(
       snapshot_.viewport.pixel_height > 0 ? snapshot_.viewport.pixel_height - 1 : 0);
   const float clamped_x = std::clamp(mouse_x_, 0.0f, max_x);
   const float clamped_y = std::clamp(mouse_y_, 0.0f, max_y);
+  if (event.pressed) {
+    const RobloxTextEditorSnapshot text = text_editor_.Snapshot();
+    if (text.focused) {
+      (void)text_editor_.EndFocusSession(text.textbox_handle, text.generation,
+                                         true);
+    }
+  }
   Status status = sink_.mouse_button(sink_.context, clamped_x, clamped_y,
                                      event.pressed, android_button);
   if (status.ok()) {
