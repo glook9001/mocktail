@@ -244,7 +244,7 @@ struct PseudoStringObject : PseudoJavaObject {
 using jnivm::my_segment;
 using jnivm::g_jni_ref_index;
 
-std::vector<std::unique_ptr<Object>> g_object_storage;
+std::unordered_map<jobject, std::unique_ptr<Object>> g_object_storage;
 std::shared_ptr<void> g_segment_owners[100000];
 std::unordered_set<jobject> g_known_objects;
 std::unordered_set<jclass> g_known_classes;
@@ -257,7 +257,7 @@ std::list<std::string> g_method_signature_storage;
 std::unordered_map<std::string, jmethodID> g_method_ids;
 std::unordered_map<jmethodID, const char*> g_method_names;
 std::unordered_map<jmethodID, const char*> g_method_signatures;
-std::vector<std::unique_ptr<PseudoArray>> g_array_storage;
+std::unordered_map<jarray, std::unique_ptr<PseudoArray>> g_array_storage;
 std::unordered_map<jarray, PseudoArray*> g_arrays;
 std::unordered_map<jobject, jlong> g_direct_buffer_capacities;
 std::unordered_map<std::string, jobject> g_static_object_fields;
@@ -559,13 +559,44 @@ static jclass StoreClass(std::shared_ptr<Class> cls) {
 
 jobject StoreObject(std::unique_ptr<Object> object) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
-  g_object_storage.push_back(std::move(object));
-  Object* raw_ptr = g_object_storage.back().get();
+  Object* raw_ptr = object.get();
   int index = AllocateSegmentSlot(raw_ptr);
   jobject handle =
       reinterpret_cast<jobject>(static_cast<uintptr_t>(index << 16));
   g_known_objects.insert(handle);
+  g_object_storage[handle] = std::move(object);
   return handle;
+}
+
+void ReleaseJniReference(jobject obj) {
+  if (obj == nullptr) {
+    return;
+  }
+  std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
+  auto arr_it = g_array_storage.find(reinterpret_cast<jarray>(obj));
+  if (arr_it != g_array_storage.end()) {
+    g_arrays.erase(arr_it->first);
+    g_array_storage.erase(arr_it);
+    return;
+  }
+  if (g_known_classes.find(reinterpret_cast<jclass>(obj)) !=
+      g_known_classes.end()) {
+    return;
+  }
+  for (const auto& pair : g_singleton_objects) {
+    if (pair.second == obj) {
+      return;
+    }
+  }
+  uintptr_t uobj = reinterpret_cast<uintptr_t>(obj);
+  uint32_t index = uobj >> 16;
+  if (index > 0 && index < 100000) {
+    my_segment[index] = nullptr;
+    g_segment_owners[index].reset();
+  }
+  g_known_objects.erase(obj);
+  g_known_strings.erase(reinterpret_cast<jstring>(obj));
+  g_object_storage.erase(obj);
 }
 
 PseudoJavaObject* PseudoObjectFromRef(jobject obj) {
@@ -3447,7 +3478,7 @@ jbyteArray MakeByteArray(jsize len) {
   }
   jbyteArray ref = reinterpret_cast<jbyteArray>(array.get());
   g_arrays[ref] = array.get();
-  g_array_storage.push_back(std::move(array));
+  g_array_storage[ref] = std::move(array);
   return ref;
 }
 
@@ -3459,7 +3490,7 @@ jfloatArray MakeFloatArray(jsize len) {
   }
   jfloatArray ref = reinterpret_cast<jfloatArray>(array.get());
   g_arrays[ref] = array.get();
-  g_array_storage.push_back(std::move(array));
+  g_array_storage[ref] = std::move(array);
   return ref;
 }
 
@@ -3471,7 +3502,7 @@ jobjectArray MakeObjectArray(jsize len, jobject init) {
   }
   jobjectArray ref = reinterpret_cast<jobjectArray>(array.get());
   g_arrays[ref] = array.get();
-  g_array_storage.push_back(std::move(array));
+  g_array_storage[ref] = std::move(array);
   return ref;
 }
 
@@ -6767,7 +6798,9 @@ void VM::InitJNIFunctionTables() {
   };
 
   native_interface_.DeleteGlobalRef =
-      [](JNIEnv* /*env*/, jobject /*obj*/) {};
+      [](JNIEnv* /*env*/, jobject obj) {
+    ReleaseJniReference(obj);
+  };
 
   native_interface_.NewLocalRef =
       [](JNIEnv* /*env*/, jobject obj) -> jobject {
@@ -6775,7 +6808,9 @@ void VM::InitJNIFunctionTables() {
   };
 
   native_interface_.DeleteLocalRef =
-      [](JNIEnv* /*env*/, jobject /*obj*/) {};
+      [](JNIEnv* /*env*/, jobject obj) {
+    ReleaseJniReference(obj);
+  };
 
   native_interface_.NewWeakGlobalRef =
       [](JNIEnv* /*env*/, jobject obj) -> jweak {
@@ -6784,7 +6819,9 @@ void VM::InitJNIFunctionTables() {
   };
 
   native_interface_.DeleteWeakGlobalRef =
-      [](JNIEnv* /*env*/, jweak /*ref*/) {};
+      [](JNIEnv* /*env*/, jweak ref) {
+    ReleaseJniReference(ref);
+  };
 
   native_interface_.GetObjectRefType =
       [](JNIEnv* /*env*/, jobject obj) -> jobjectRefType {

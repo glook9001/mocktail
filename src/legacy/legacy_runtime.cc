@@ -3216,10 +3216,10 @@ void PumpRobloxMainThreadMessagesOnce() {
   }
 #if defined(__GLIBC__)
   static auto last_trim_time = std::chrono::steady_clock::now();
-  if (pump_count % 600 == 0) {
+  if (pump_count % 180 == 0) {
     const auto now = std::chrono::steady_clock::now();
     if (std::chrono::duration_cast<std::chrono::seconds>(now - last_trim_time)
-            .count() >= 15) {
+            .count() >= 5) {
       last_trim_time = now;
       malloc_trim(0);
       MocktailTrimEngineMemory(15 /* TRIM_MEMORY_RUNNING_CRITICAL */);
