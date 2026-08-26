@@ -251,13 +251,13 @@ struct OpenSlSimpleBufferQueueAdapter::State
         }
       }
     }
-    if (notify_worker) {
-      state->callback_cv.notify_one();
-    }
     if (consumed) {
       state->NotifyEvent(OpenSlBufferQueueEvent::kConsumed, size_bytes);
     } else if (discarded) {
       state->NotifyEvent(OpenSlBufferQueueEvent::kDiscarded, size_bytes);
+    }
+    if (notify_worker) {
+      state->callback_cv.notify_one();
     }
   }
 

@@ -271,7 +271,14 @@ class SdlAudioSink final : public AudioSink {
       return Status::Ok();
     }
     switching_device_ = true;
-    shutdown_cv_.wait(lock, [this] { return active_calls_ == 0; });
+    shutdown_cv_.wait(lock,
+                      [this] { return active_calls_ == 0 || shutting_down_; });
+    if (shutting_down_ || stream_ == nullptr || logical_device_id_ == 0) {
+      switching_device_ = false;
+      lock.unlock();
+      shutdown_cv_.notify_all();
+      return FailedPrecondition("audio sink is shut down");
+    }
 
     const bool was_paused = SDL_AudioDevicePaused(logical_device_id_);
     const SDL_AudioDeviceID replacement =
@@ -329,7 +336,9 @@ class SdlAudioSink final : public AudioSink {
         return;
       }
       shutting_down_ = true;
-      shutdown_cv_.wait(lock, [this] { return active_calls_ == 0; });
+      shutdown_cv_.notify_all();
+      shutdown_cv_.wait(
+          lock, [this] { return active_calls_ == 0 && !switching_device_; });
       stream = std::exchange(stream_, nullptr);
       logical_device_id = std::exchange(logical_device_id_, 0);
     }

@@ -593,9 +593,22 @@ abi::Result ObjectRegisterCallback(abi::Object self,
 void ObjectAbortAsyncOperation(abi::Object /*self*/) {}
 
 void ObjectDestroy(abi::Object self) {
-  RuntimeObject* object = FromObject(self);
-  if (object == nullptr) {
+  if (self == nullptr) {
     return;
+  }
+  RuntimeObject* object = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_active_objects_mutex);
+    const auto* handle = reinterpret_cast<const ObjectHandle*>(self);
+    object = handle->object;
+    if (object == nullptr ||
+        g_active_objects.find(object) == g_active_objects.end()) {
+      return;
+    }
+    if (object->magic != kRuntimeObjectMagic) {
+      return;
+    }
+    g_active_objects.erase(object);
   }
 
   if (object->parent_engine != nullptr) {
