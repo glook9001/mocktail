@@ -2100,20 +2100,24 @@ bool PumpEvents() {
   MaybePersistWindowState();
   MaybeRecoverVulkanSurface();
   MaybeReportVulkanPresentStall();
-  const char* auto_exit_value =
-      GetEnvNonEmpty("MOCKTAIL_AUTO_EXIT_AFTER_PRESENT_MS");
-  if (!g_state.quit_requested && auto_exit_value != nullptr) {
+  static const long auto_exit_delay_ms = [] {
+    const char* auto_exit_value =
+        GetEnvNonEmpty("MOCKTAIL_AUTO_EXIT_AFTER_PRESENT_MS");
+    if (auto_exit_value == nullptr) return 0L;
     char* end = nullptr;
-    const long delay_ms = std::strtol(auto_exit_value, &end, 10);
+    const long parsed = std::strtol(auto_exit_value, &end, 10);
+    return (end != auto_exit_value && parsed > 0) ? parsed : 0L;
+  }();
+  if (!g_state.quit_requested && auto_exit_delay_ms > 0) {
     const uint64_t first_present_ns =
         g_first_present_ticks_ns.load(std::memory_order_acquire);
-    if (end != auto_exit_value && delay_ms > 0 && first_present_ns != 0) {
+    if (first_present_ns != 0) {
       const uint64_t elapsed_ns = SDL_GetTicksNS() - first_present_ns;
-      if (elapsed_ns >= static_cast<uint64_t>(delay_ms) * 1000000ULL) {
+      if (elapsed_ns >= static_cast<uint64_t>(auto_exit_delay_ms) * 1000000ULL) {
         fprintf(stderr,
                 "  [window] automatic exit requested %ld ms after first "
                 "present\n",
-                delay_ms);
+                auto_exit_delay_ms);
         g_state.quit_requested = true;
       }
     }
@@ -2125,8 +2129,11 @@ void PaceInputPump() {
   if (!g_state.initialised) {
     return;
   }
-  const char* enable_pacing = std::getenv("MOCKTAIL_ENABLE_INPUT_PACER");
-  if (enable_pacing != nullptr && enable_pacing[0] != '0') {
+  static const bool enable_pacing = [] {
+    const char* v = std::getenv("MOCKTAIL_ENABLE_INPUT_PACER");
+    return v != nullptr && v[0] != '0';
+  }();
+  if (enable_pacing) {
     const uint64_t delay_ns =
         g_input_pump_pacer.DelayBeforeNextPump(SDL_GetTicksNS());
     if (delay_ns != 0) {
