@@ -2125,10 +2125,13 @@ void PaceInputPump() {
   if (!g_state.initialised) {
     return;
   }
-  const uint64_t delay_ns =
-      g_input_pump_pacer.DelayBeforeNextPump(SDL_GetTicksNS());
-  if (delay_ns != 0) {
-    SDL_DelayPrecise(delay_ns);
+  const char* enable_pacing = std::getenv("MOCKTAIL_ENABLE_INPUT_PACER");
+  if (enable_pacing != nullptr && enable_pacing[0] != '0') {
+    const uint64_t delay_ns =
+        g_input_pump_pacer.DelayBeforeNextPump(SDL_GetTicksNS());
+    if (delay_ns != 0) {
+      SDL_DelayPrecise(delay_ns);
+    }
   }
 }
 

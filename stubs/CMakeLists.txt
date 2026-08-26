@@ -17,8 +17,14 @@ function(configure_stub TARGET SONAME)
   target_compile_options(${TARGET} PRIVATE -Wno-unused-parameter)
 endfunction()
 
+# Single-cycle hardware math builtins for libm.so
+add_library(stub_sys_m SHARED libm_stub.cc)
+configure_stub(stub_sys_m "libm.so")
+target_compile_options(stub_sys_m PRIVATE -O3 -fno-math-errno)
+target_link_options(stub_sys_m PRIVATE "LINKER:--no-as-needed")
+target_link_libraries(stub_sys_m PRIVATE -lm)
+
 foreach(_pair
-  "libm.so|m"
   "libz.so|z"
   "libdl.so|dl"
 )

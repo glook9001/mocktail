@@ -571,6 +571,12 @@ RobloxInputDispatchResult RobloxInputRouter::HandleMouseButtonLocked(
       snapshot_.viewport.pixel_height > 0 ? snapshot_.viewport.pixel_height - 1 : 0);
   const float clamped_x = std::clamp(mouse_x_, 0.0f, max_x);
   const float clamped_y = std::clamp(mouse_y_, 0.0f, max_y);
+  float click_x = clamped_x;
+  float click_y = clamped_y;
+  if (event.x == 0.0f && event.y == 0.0f && max_x > 0.0f && max_y > 0.0f) {
+    click_x = max_x / 2.0f;
+    click_y = max_y / 2.0f;
+  }
   if (event.pressed) {
     const RobloxTextEditorSnapshot text = text_editor_.Snapshot();
     if (text.focused) {
@@ -578,7 +584,7 @@ RobloxInputDispatchResult RobloxInputRouter::HandleMouseButtonLocked(
                                          true);
     }
   }
-  Status status = sink_.mouse_button(sink_.context, clamped_x, clamped_y,
+  Status status = sink_.mouse_button(sink_.context, click_x, click_y,
                                      event.pressed, android_button);
   if (status.ok()) {
     const auto active = std::find(active_mouse_buttons_.begin(),

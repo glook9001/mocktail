@@ -264,6 +264,16 @@ Status RobloxInputNativeAdapter::ReleaseFocusCallback(void* context,
 
 Status RobloxInputNativeAdapter::MouseMove(float x, float y, float delta_x,
                                            float delta_y) {
+  if (__builtin_expect(symbols_.pass_mouse_move != nullptr && initialized_ &&
+                           native_input_class_ != nullptr,
+                       1)) {
+    JNIEnv* env = nullptr;
+    if (__builtin_expect(environment_.Acquire(&env).ok() && env != nullptr,
+                         1)) {
+      symbols_.pass_mouse_move(env, native_input_class_, x, y, delta_x, delta_y);
+      return Status::Ok();
+    }
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   if (symbols_.pass_mouse_move == nullptr) {
     return Unsupported("nativePassMouseMove is unavailable");

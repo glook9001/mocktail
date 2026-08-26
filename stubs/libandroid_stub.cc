@@ -219,31 +219,42 @@ bool OpenStoredApkEntryDescriptor(const std::string& entry_name, int* fd,
 }
 
 template <typename Fn>
-Fn ResolveDefault(const char* name) {
-  return reinterpret_cast<Fn>(dlsym(RTLD_DEFAULT, name));
+Fn ResolveCached(Fn* slot, const char* name) {
+  Fn fn = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+  if (__builtin_expect(fn == nullptr, 0)) {
+    fn = reinterpret_cast<Fn>(dlsym(RTLD_DEFAULT, name));
+    if (fn != nullptr) {
+      __atomic_store_n(slot, fn, __ATOMIC_RELEASE);
+    }
+  }
+  return fn;
 }
 
 void* MocktailNativeWindow() {
   using Fn = void* (*)();
-  Fn fn = ResolveDefault<Fn>("mocktail_native_window");
+  static Fn cached_fn = nullptr;
+  Fn fn = ResolveCached(&cached_fn, "mocktail_native_window");
   return fn != nullptr ? fn() : nullptr;
 }
 
 int MocktailWindowWidth() {
   using Fn = int (*)();
-  Fn fn = ResolveDefault<Fn>("mocktail_window_width");
+  static Fn cached_fn = nullptr;
+  Fn fn = ResolveCached(&cached_fn, "mocktail_window_width");
   return fn != nullptr ? fn() : 1280;
 }
 
 int MocktailWindowHeight() {
   using Fn = int (*)();
-  Fn fn = ResolveDefault<Fn>("mocktail_window_height");
+  static Fn cached_fn = nullptr;
+  Fn fn = ResolveCached(&cached_fn, "mocktail_window_height");
   return fn != nullptr ? fn() : 720;
 }
 
 bool MocktailUsesDirectVulkan() {
   using Fn = bool (*)();
-  Fn fn = ResolveDefault<Fn>("mocktail_window_uses_direct_vulkan");
+  static Fn cached_fn = nullptr;
+  Fn fn = ResolveCached(&cached_fn, "mocktail_window_uses_direct_vulkan");
   if (fn != nullptr) {
     return fn();
   }
