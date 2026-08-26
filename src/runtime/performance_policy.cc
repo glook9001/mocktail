@@ -241,13 +241,18 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
     const std::string workers = std::to_string(render_worker_count);
     const std::string occlusion_workers =
         std::to_string(std::max(1, render_worker_count / 2));
-    const std::array<ClientSetting, 6> rendering_settings = {{
+    const std::array<ClientSetting, 11> rendering_settings = {{
         {"FIntSmoothClusterTaskQueueMaxParallelTasks", workers},
         {"FIntOcclusionWorkerThreadCount", occlusion_workers},
         {"FFlagMovePrerenderV2", "True"},
         {"FFlagGcInParallelWithRenderPrepare3", "True"},
         {"FIntRenderTextureMipBias", "1"},
         {"FFlagSimRuntimeContentTranscodeBlockingCall", "False"},
+        {"FFlagRenderEnableLowEndLOD", "True"},
+        {"FIntTerrainArraySliceSize", "4"},
+        {"FFlagFastGPULightGrid", "True"},
+        {"FFlagRenderOptimizeLightGrid", "True"},
+        {"FFlagRenderFixParticlesCulling", "True"},
     }};
     if (!apply_settings(rendering_settings)) {
       return false;
