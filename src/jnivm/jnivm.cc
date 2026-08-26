@@ -6798,9 +6798,7 @@ void VM::InitJNIFunctionTables() {
   };
 
   native_interface_.DeleteGlobalRef =
-      [](JNIEnv* /*env*/, jobject obj) {
-    ReleaseJniReference(obj);
-  };
+      [](JNIEnv* /*env*/, jobject /*obj*/) {};
 
   native_interface_.NewLocalRef =
       [](JNIEnv* /*env*/, jobject obj) -> jobject {
@@ -6808,9 +6806,7 @@ void VM::InitJNIFunctionTables() {
   };
 
   native_interface_.DeleteLocalRef =
-      [](JNIEnv* /*env*/, jobject obj) {
-    ReleaseJniReference(obj);
-  };
+      [](JNIEnv* /*env*/, jobject /*obj*/) {};
 
   native_interface_.NewWeakGlobalRef =
       [](JNIEnv* /*env*/, jobject obj) -> jweak {
@@ -6819,9 +6815,7 @@ void VM::InitJNIFunctionTables() {
   };
 
   native_interface_.DeleteWeakGlobalRef =
-      [](JNIEnv* /*env*/, jweak ref) {
-    ReleaseJniReference(ref);
-  };
+      [](JNIEnv* /*env*/, jweak /*ref*/) {};
 
   native_interface_.GetObjectRefType =
       [](JNIEnv* /*env*/, jobject obj) -> jobjectRefType {
