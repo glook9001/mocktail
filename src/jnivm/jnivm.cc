@@ -297,7 +297,8 @@ std::shared_ptr<Class> FallbackClassForName(const std::string& class_name) {
 }
 
 bool TraceEnabled() {
-  return std::getenv("MOCKTAIL_JNI_TRACE") != nullptr;
+  static const bool enabled = std::getenv("MOCKTAIL_JNI_TRACE") != nullptr;
+  return enabled;
 }
 
 bool EnvironmentTraceEnabled(const char* name) {
@@ -306,9 +307,11 @@ bool EnvironmentTraceEnabled(const char* name) {
 }
 
 bool StringTraceEnabled() {
-  return EnvironmentTraceEnabled("MOCKTAIL_JNI_STRING_TRACE") ||
-         EnvironmentTraceEnabled("MOCKTAIL_TRACE_ALL") ||
-         EnvironmentTraceEnabled("MOCKTAIL_FULL_TRACE");
+  static const bool enabled =
+      EnvironmentTraceEnabled("MOCKTAIL_JNI_STRING_TRACE") ||
+      EnvironmentTraceEnabled("MOCKTAIL_TRACE_ALL") ||
+      EnvironmentTraceEnabled("MOCKTAIL_FULL_TRACE");
+  return enabled;
 }
 
 void Trace(const char* name) {
