@@ -984,28 +984,8 @@ int ALooper_pollAll(int timeout_ms, int* out_fd, int* out_events,
 }
 
 // ANativeWindow — surface / window handle
-//
-// Lock-free fast paths for ANativeWindow on standard Vulkan rendering paths:
-// Vulkan WSI interacts directly with the native windowing system without EGL.
-// An atomic flag tracks whether EGL aliases exist. On standard Vulkan paths
-// (has_egl_aliases == false), window dimension queries and handle lookups
-// completely bypass global registry mutex locks and hash map lookups, using
-// lock-free atomic loads and stores with std::memory_order_release.
-
-static std::atomic<bool> g_has_egl_aliases{false};
-static std::atomic<int32_t> g_atomic_window_width{0};
-static std::atomic<int32_t> g_atomic_window_height{0};
 
 struct ANativeWindow {};
-
-void mocktail_set_egl_alias_presence(bool has_aliases) {
-  g_has_egl_aliases.store(has_aliases, std::memory_order_release);
-}
-
-void mocktail_set_atomic_window_dimensions(int32_t width, int32_t height) {
-  g_atomic_window_width.store(width, std::memory_order_release);
-  g_atomic_window_height.store(height, std::memory_order_release);
-}
 
 void ANativeWindow_acquire(ANativeWindow*) {}
 void ANativeWindow_release(ANativeWindow*) {}
@@ -1045,19 +1025,7 @@ ANativeWindow* ANativeWindow_fromSurface(void* env, void* surface) {
 }
 
 int32_t ANativeWindow_getWidth(ANativeWindow* window) {
-  // Fast path: bypass global registry mutex and hash map lookups on standard
-  // Vulkan rendering paths using atomic EGL alias presence tracking.
-  if (__builtin_expect(!g_has_egl_aliases.load(std::memory_order_relaxed), 1)) {
-    const int32_t cached =
-        g_atomic_window_width.load(std::memory_order_relaxed);
-    if (__builtin_expect(cached > 0, 1)) {
-      return cached;
-    }
-  }
   int width = MocktailWindowWidth();
-  if (width > 0) {
-    g_atomic_window_width.store(width, std::memory_order_release);
-  }
   if (TraceEnabled()) {
     std::fprintf(stderr,
                  "[androidstub] ANativeWindow_getWidth window=%p -> %d\n",
@@ -1067,19 +1035,7 @@ int32_t ANativeWindow_getWidth(ANativeWindow* window) {
 }
 
 int32_t ANativeWindow_getHeight(ANativeWindow* window) {
-  // Fast path: bypass global registry mutex and hash map lookups on standard
-  // Vulkan rendering paths using atomic EGL alias presence tracking.
-  if (__builtin_expect(!g_has_egl_aliases.load(std::memory_order_relaxed), 1)) {
-    const int32_t cached =
-        g_atomic_window_height.load(std::memory_order_relaxed);
-    if (__builtin_expect(cached > 0, 1)) {
-      return cached;
-    }
-  }
   int height = MocktailWindowHeight();
-  if (height > 0) {
-    g_atomic_window_height.store(height, std::memory_order_release);
-  }
   if (TraceEnabled()) {
     std::fprintf(stderr,
                  "[androidstub] ANativeWindow_getHeight window=%p -> %d\n",
