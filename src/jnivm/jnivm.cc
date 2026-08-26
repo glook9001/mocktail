@@ -221,9 +221,8 @@ std::vector<jchar> ModifiedUtf8ToUtf16(const char* input) {
 struct PseudoStringObject : PseudoJavaObject {
   PseudoStringObject(std::shared_ptr<Class> cls, const char* utf)
       : PseudoJavaObject(std::move(cls)),
-        chars(ModifiedUtf8ToUtf16(utf)),
-        value(Utf16ToUtf8(chars)),
-        modified_utf8(Utf16ToModifiedUtf8(chars)) {}
+        value(utf != nullptr ? utf : ""),
+        modified_utf8(utf != nullptr ? utf : "") {}
 
   PseudoStringObject(std::shared_ptr<Class> cls, const jchar* utf16,
                      jsize length)
@@ -235,7 +234,13 @@ struct PseudoStringObject : PseudoJavaObject {
     modified_utf8 = Utf16ToModifiedUtf8(chars);
   }
 
-  std::vector<jchar> chars;
+  void EnsureUtf16() const {
+    if (chars.empty() && !value.empty()) {
+      chars = ModifiedUtf8ToUtf16(value.c_str());
+    }
+  }
+
+  mutable std::vector<jchar> chars;
   std::string value;
   std::string modified_utf8;
 };
@@ -249,7 +254,6 @@ std::unordered_set<jobject> g_known_objects;
 std::unordered_set<jclass> g_known_classes;
 std::unordered_map<std::string, jobject> g_singleton_objects;
 std::unordered_map<std::string, std::shared_ptr<Class>> g_fallback_classes;
-std::list<std::string> g_string_storage;
 std::unordered_set<jstring> g_known_strings;
 std::list<std::string> g_method_name_storage;
 std::list<std::string> g_method_signature_storage;
@@ -879,7 +883,12 @@ jbyteArray JavaStringGetUtf8Bytes(jobject obj, jstring charset_name) {
     if (string_object == nullptr) {
       return nullptr;
     }
-    bytes = JavaStringUtf8Bytes(string_object->chars);
+    if (!string_object->value.empty()) {
+      bytes = string_object->value;
+    } else {
+      string_object->EnsureUtf16();
+      bytes = JavaStringUtf8Bytes(string_object->chars);
+    }
   }
   if (bytes.size() >
       static_cast<std::size_t>(std::numeric_limits<jsize>::max())) {
@@ -889,10 +898,7 @@ jbyteArray JavaStringGetUtf8Bytes(jobject obj, jstring charset_name) {
   jbyteArray result =
       MakeByteArray(static_cast<jsize>(bytes.size()));
   PseudoArray* array = ArrayFromRef(result);
-  if (array == nullptr || array->bytes.size() != bytes.size()) {
-    return nullptr;
-  }
-  if (!bytes.empty()) {
+  if (array && !bytes.empty()) {
     std::memcpy(array->bytes.data(), bytes.data(), bytes.size());
   }
   return result;
@@ -919,9 +925,12 @@ const jchar* StringUtf16Chars(jstring str) {
   if (g_known_strings.find(str) != g_known_strings.end()) {
     auto* string_object = dynamic_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-    return string_object && !string_object->chars.empty()
-               ? string_object->chars.data()
-               : kEmptyUtf16;
+    if (string_object) {
+      string_object->EnsureUtf16();
+      return !string_object->chars.empty() ? string_object->chars.data()
+                                           : kEmptyUtf16;
+    }
+    return kEmptyUtf16;
   }
   return reinterpret_cast<const jchar*>(str);
 }
@@ -931,9 +940,11 @@ jsize StringUtf16Length(jstring str) {
   if (g_known_strings.find(str) != g_known_strings.end()) {
     auto* string_object = dynamic_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-    return string_object != nullptr
-               ? static_cast<jsize>(string_object->chars.size())
-               : 0;
+    if (string_object != nullptr) {
+      string_object->EnsureUtf16();
+      return static_cast<jsize>(string_object->chars.size());
+    }
+    return 0;
   }
   const char* bytes = reinterpret_cast<const char*>(str);
   return bytes != nullptr ? static_cast<jsize>(std::strlen(bytes)) : 0;
@@ -959,8 +970,11 @@ void CopyStringRegion(jstring str, jsize start, jsize length, jchar* output) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   auto* string_object = dynamic_cast<PseudoStringObject*>(
       PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-  if (string_object == nullptr ||
-      static_cast<std::size_t>(start) >= string_object->chars.size()) {
+  if (string_object == nullptr) {
+    return;
+  }
+  string_object->EnsureUtf16();
+  if (static_cast<std::size_t>(start) >= string_object->chars.size()) {
     return;
   }
   const std::size_t count = std::min(
@@ -977,8 +991,11 @@ void CopyStringModifiedUtf8Region(jstring str, jsize start, jsize length,
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   auto* string_object = dynamic_cast<PseudoStringObject*>(
       PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-  if (string_object == nullptr ||
-      static_cast<std::size_t>(start) >= string_object->chars.size()) {
+  if (string_object == nullptr) {
+    return;
+  }
+  string_object->EnsureUtf16();
+  if (static_cast<std::size_t>(start) >= string_object->chars.size()) {
     return;
   }
   const std::size_t count = std::min(
