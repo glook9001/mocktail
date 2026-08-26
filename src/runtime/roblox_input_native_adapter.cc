@@ -438,6 +438,17 @@ Status RobloxInputNativeAdapter::PassText(int64_t textbox_handle,
 }
 
 Status RobloxInputNativeAdapter::ReturnPressed(int64_t textbox_handle) {
+  if (__builtin_expect(symbols_.return_pressed_from_on_screen_keyboard != nullptr &&
+                           initialized_ && native_gl_class_ != nullptr,
+                       1)) {
+    JNIEnv* env = nullptr;
+    if (__builtin_expect(environment_.Acquire(&env).ok() && env != nullptr,
+                         1)) {
+      symbols_.return_pressed_from_on_screen_keyboard(
+          env, native_gl_class_, static_cast<jlong>(textbox_handle));
+      return Status::Ok();
+    }
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   JNIEnv* env = nullptr;
   Status status = RequireReadyLocked(&env);
