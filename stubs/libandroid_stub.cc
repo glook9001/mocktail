@@ -17,13 +17,18 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <vector>
 
 // Read-only asset access
@@ -475,33 +480,228 @@ int32_t AConfiguration_getNavHidden(AConfiguration*) {
   return 1;  // ACONFIGURATION_NAVHIDDEN_YES
 }
 
-// ALooper — event loop / file descriptor polling
+}  // extern "C"
 
-struct ALooper {};
+// ALooper — high-performance Linux epoll + eventfd event loop
 
-ALooper* ALooper_prepare(int) {
-  static ALooper kLooper;
-  return &kLooper;
+namespace {
+
+constexpr int kPollWake = -1;
+constexpr int kPollCallback = -2;
+constexpr int kPollTimeout = -3;
+constexpr int kPollError = -4;
+constexpr std::size_t kMaxRegistrations = 32;
+
+using LooperCallback = int (*)(int, int, void*);
+
+struct LooperRegistration {
+  int fd = -1;
+  int ident = 0;
+  int events = 0;
+  LooperCallback callback = nullptr;
+  void* data = nullptr;
+};
+
+struct ALooper {
+  ALooper()
+      : epoll_fd(::epoll_create1(EPOLL_CLOEXEC)),
+        wake_fd(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) {
+    if (epoll_fd < 0 || wake_fd < 0) {
+      if (epoll_fd >= 0) ::close(epoll_fd);
+      if (wake_fd >= 0) ::close(wake_fd);
+      epoll_fd = -1;
+      wake_fd = -1;
+      return;
+    }
+    epoll_event event{};
+    event.events = EPOLLIN;
+    event.data.fd = wake_fd;
+    if (::epoll_ctl(epoll_fd, EPOLL_CTL_ADD, wake_fd, &event) != 0) {
+      ::close(epoll_fd);
+      ::close(wake_fd);
+      epoll_fd = -1;
+      wake_fd = -1;
+    }
+  }
+
+  ~ALooper() {
+    if (epoll_fd >= 0) ::close(epoll_fd);
+    if (wake_fd >= 0) ::close(wake_fd);
+  }
+
+  ALooper(const ALooper&) = delete;
+  ALooper& operator=(const ALooper&) = delete;
+
+  int epoll_fd = -1;
+  int wake_fd = -1;
+  std::atomic<int> refs{1};
+  std::atomic<bool> polling{false};
+  std::mutex mutex;
+  std::array<LooperRegistration, kMaxRegistrations> registrations{};
+  std::size_t registration_count = 0;
+};
+
+thread_local ALooper g_thread_looper;
+
+uint32_t EpollEventsFromAndroid(int events) {
+  uint32_t result = 0;
+  if ((events & (1 << 0)) != 0) result |= EPOLLIN;
+  if ((events & (1 << 1)) != 0) result |= EPOLLOUT;
+  return result;
 }
 
-ALooper* ALooper_forThread() {
-  static ALooper kLooper;
-  return &kLooper;
+int AndroidEventsFromEpoll(uint32_t events) {
+  int result = 0;
+  if ((events & EPOLLIN) != 0) result |= 1 << 0;
+  if ((events & EPOLLOUT) != 0) result |= 1 << 1;
+  if ((events & EPOLLERR) != 0) result |= 1 << 2;
+  if ((events & EPOLLHUP) != 0) result |= 1 << 3;
+  if ((events & EPOLLPRI) != 0) result |= 1 << 4;
+  return result;
 }
 
-void ALooper_acquire(ALooper*) {}
-void ALooper_release(ALooper*) {}
+LooperRegistration FindLooperRegistration(ALooper* looper, int fd, bool* found) {
+  std::scoped_lock lock(looper->mutex);
+  for (std::size_t i = 0; i < looper->registration_count; ++i) {
+    if (looper->registrations[i].fd == fd) {
+      if (found) *found = true;
+      return looper->registrations[i];
+    }
+  }
+  if (found) *found = false;
+  return {};
+}
 
-int ALooper_addFd(ALooper*, int, int,
-                  int, void*, void*) {
+}  // namespace
+
+extern "C" {
+
+ALooper* ALooper_forThread() { return &g_thread_looper; }
+ALooper* ALooper_prepare(int) { return ALooper_forThread(); }
+
+void ALooper_acquire(ALooper* looper) {
+  if (looper != nullptr) {
+    looper->refs.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+void ALooper_release(ALooper* looper) {
+  if (looper != nullptr) {
+    looper->refs.fetch_sub(1, std::memory_order_relaxed);
+  }
+}
+
+int ALooper_addFd(ALooper* looper, int fd, int ident, int events,
+                  int (*callback)(int, int, void*), void* data) {
+  if (looper == nullptr || looper->epoll_fd < 0 || fd < 0 ||
+      (callback == nullptr && ident < 0)) {
+    errno = EINVAL;
+    return 0;
+  }
+
+  epoll_event event{};
+  event.events = EpollEventsFromAndroid(events);
+  event.data.fd = fd;
+  std::scoped_lock lock(looper->mutex);
+  std::size_t index = looper->registration_count;
+  for (std::size_t i = 0; i < looper->registration_count; ++i) {
+    if (looper->registrations[i].fd == fd) {
+      index = i;
+      break;
+    }
+  }
+  const bool update = index < looper->registration_count;
+  if (!update && looper->registration_count == kMaxRegistrations) {
+    errno = ENOSPC;
+    return 0;
+  }
+  const int operation = update ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+  if (::epoll_ctl(looper->epoll_fd, operation, fd, &event) != 0) return 0;
+  looper->registrations[index] = {fd, ident, events, callback, data};
+  if (!update) ++looper->registration_count;
   return 1;
 }
 
-int ALooper_removeFd(ALooper*, int) { return 1; }
+int ALooper_removeFd(ALooper* looper, int fd) {
+  if (looper == nullptr || looper->epoll_fd < 0) return 0;
+  std::scoped_lock lock(looper->mutex);
+  for (std::size_t i = 0; i < looper->registration_count; ++i) {
+    if (looper->registrations[i].fd != fd) continue;
+    (void)::epoll_ctl(looper->epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+    looper->registrations[i] =
+        looper->registrations[--looper->registration_count];
+    return 1;
+  }
+  return 0;
+}
 
-int ALooper_pollOnce(int, int*, int*,
-                     void**) {
-  return -2;  // ALOOPER_POLL_TIMEOUT
+void ALooper_wake(ALooper* looper) {
+  if (looper == nullptr || looper->wake_fd < 0) return;
+  const uint64_t value = 1;
+  (void)::write(looper->wake_fd, &value, sizeof(value));
+}
+
+bool ALooper_isPolling(ALooper* looper) {
+  return looper != nullptr &&
+         looper->polling.load(std::memory_order_relaxed);
+}
+
+int ALooper_pollOnce(int timeout_ms, int* out_fd, int* out_events,
+                     void** out_data) {
+  auto* looper = static_cast<ALooper*>(ALooper_forThread());
+  if (looper == nullptr || looper->epoll_fd < 0) return kPollError;
+
+  std::array<epoll_event, kMaxRegistrations + 1> events{};
+  looper->polling.store(true, std::memory_order_relaxed);
+  const int ready = ::epoll_wait(looper->epoll_fd, events.data(),
+                                 static_cast<int>(events.size()), timeout_ms);
+  looper->polling.store(false, std::memory_order_relaxed);
+
+  if (ready == 0) return kPollTimeout;
+  if (ready < 0) return errno == EINTR ? kPollTimeout : kPollError;
+
+  bool had_callback = false;
+  bool had_wake = false;
+
+  for (int i = 0; i < ready; ++i) {
+    const int fd = events[static_cast<std::size_t>(i)].data.fd;
+    if (fd == looper->wake_fd) {
+      uint64_t value = 0;
+      (void)::read(looper->wake_fd, &value, sizeof(value));
+      had_wake = true;
+      continue;
+    }
+    bool found = false;
+    const LooperRegistration registration =
+        FindLooperRegistration(looper, fd, &found);
+    if (!found) continue;
+    const int android_events =
+        AndroidEventsFromEpoll(events[static_cast<std::size_t>(i)].events);
+    if (registration.callback != nullptr) {
+      const int keep = registration.callback(registration.fd, android_events,
+                                             registration.data);
+      if (!keep) (void)ALooper_removeFd(looper, registration.fd);
+      had_callback = true;
+    } else {
+      if (out_fd) *out_fd = registration.fd;
+      if (out_events) *out_events = android_events;
+      if (out_data) *out_data = registration.data;
+      return registration.ident;
+    }
+  }
+
+  if (had_callback) return kPollCallback;
+  if (had_wake) return kPollWake;
+  return kPollTimeout;
+}
+
+int ALooper_pollAll(int timeout_ms, int* out_fd, int* out_events,
+                    void** out_data) {
+  int result = ALooper_pollOnce(timeout_ms, out_fd, out_events, out_data);
+  while (result == kPollCallback || result == kPollWake) {
+    result = ALooper_pollOnce(0, out_fd, out_events, out_data);
+  }
+  return result;
 }
 
 // ANativeWindow — surface / window handle
