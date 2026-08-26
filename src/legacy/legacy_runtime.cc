@@ -5503,6 +5503,11 @@ uintptr_t SeedStage6StringFieldValueScratch(uintptr_t source_string) {
   }
 
   std::string value(chars, length);
+  auto* old_words =
+      reinterpret_cast<uintptr_t*>(g_stage6_string_field_value_scratch);
+  if ((old_words[0] & 1u) != 0 && old_words[2] != 0) {
+    std::free(reinterpret_cast<void*>(old_words[2]));
+  }
   std::memset(g_stage6_string_field_value_scratch, 0,
               sizeof(g_stage6_string_field_value_scratch));
   WriteLibcxxString(g_stage6_string_field_value_scratch, value);
