@@ -312,6 +312,13 @@ EGLSurface eglCreateWindowSurface(EGLDisplay display, EGLConfig config,
     SetError(kEglNotInitialized);
     return nullptr;
   }
+  using SetPresenceFn = void (*)(bool);
+  static SetPresenceFn set_presence = nullptr;
+  SetPresenceFn set_presence_fn =
+      ResolveCached(&set_presence, "mocktail_set_egl_alias_presence");
+  if (set_presence_fn != nullptr) {
+    set_presence_fn(true);
+  }
   if (TraceEnabled()) {
     fprintf(stderr,
             "[eglstub] eglCreateWindowSurface display=%p config=%p "
@@ -500,6 +507,13 @@ EGLBoolean eglDestroySurface(EGLDisplay display, EGLSurface surface) {
       surface != ActiveSurface()) {
     SetError(kEglBadDisplay);
     return kEglFalse;
+  }
+  using SetPresenceFn = void (*)(bool);
+  static SetPresenceFn set_presence = nullptr;
+  SetPresenceFn set_presence_fn =
+      ResolveCached(&set_presence, "mocktail_set_egl_alias_presence");
+  if (set_presence_fn != nullptr) {
+    set_presence_fn(false);
   }
   SetError(kEglSuccess);
   return kEglTrue;
