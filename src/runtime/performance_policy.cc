@@ -241,6 +241,14 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
     const std::string workers = std::to_string(render_worker_count);
     const std::string occlusion_workers =
         std::to_string(std::max(1, render_worker_count / 2));
+    const char* custom_quality = std::getenv("MOCKTAIL_GRAPHICS_QUALITY");
+    const std::string quality_str =
+        (custom_quality != nullptr && custom_quality[0] != '\0')
+            ? custom_quality
+            : "3";
+    const bool manual_quality =
+        quality_str == "auto" || quality_str == "0" || quality_str == "manual";
+
     const std::array<ClientSetting, 68> rendering_settings = {{
         {"FIntSmoothClusterTaskQueueMaxParallelTasks", workers},
         {"FIntOcclusionWorkerThreadCount", occlusion_workers},
@@ -298,7 +306,7 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
         {"FFlagRenderAllocateShadowMapResourcesOnDemand", "True"},
         {"FIntRenderShadowMapDepthCacheMemLimit", "16"},
         {"FIntTM2ShadowMapMaxMips", "1"},
-        {"FIntDebugFRMQualityLevelOverride", "3"},
+        {"FIntDebugForceMSAASamples", "1"},
         {"FFlagLuauStartupGcSuppression", "False"},
         {"FIntLuauGcStepMul", "300"},
         {"FIntLuauGcGoalCore", "120"},
@@ -313,6 +321,13 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
     }};
     if (!apply_settings(rendering_settings)) {
       return false;
+    }
+    if (!manual_quality) {
+      if (!SetCompatibleValue(
+              &overrides, {"FIntDebugFRMQualityLevelOverride", quality_str},
+              error)) {
+        return false;
+      }
     }
   }
   *merged_json = overrides.dump();

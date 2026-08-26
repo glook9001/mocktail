@@ -63,7 +63,8 @@ bool ApplyGraphicsLaunchPolicy(const RuntimeConfig& config,
   if (direct_vulkan) {
     if (!SetDefault("MOCKTAIL_CLIENT_SETTINGS_OVERRIDES_JSON",
                     kVulkanClientSettingsOverrides, error) ||
-        !SetDefault("ANV_SYS_MEM_LIMIT", "50", error)) {
+        !SetDefault("ANV_SYS_MEM_LIMIT", "50", error) ||
+        !SetDefault("MESA_VK_WSI_PRESENT_MODE", "mailbox", error)) {
       return false;
     }
   }
