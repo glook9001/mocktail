@@ -1609,8 +1609,9 @@ bool ShouldIgnoreCloseRequest() {
 }
 
 void MaybeQueueInputReadinessSequence() {
-  if (g_state.input_test_sequence_queued ||
-      !StringEquals(GetEnvNonEmpty("MOCKTAIL_INPUT_TEST_CLICK"), "1") ||
+  static const bool input_test_click =
+      StringEquals(GetEnvNonEmpty("MOCKTAIL_INPUT_TEST_CLICK"), "1");
+  if (!input_test_click || g_state.input_test_sequence_queued ||
       !HasPresentedFrame() || !g_platform_event_observer.HasObserver() ||
       g_state.sdl_window == nullptr) {
     return;
@@ -1791,9 +1792,14 @@ bool HandleFullscreenShortcut(const SDL_Event& event) {
 }
 
 void MaybeRequestFullscreenReadiness() {
-  const char* mode = GetEnvNonEmpty("MOCKTAIL_FULLSCREEN_READINESS");
-  const bool single_transition = StringEquals(mode, "1");
-  const bool round_trip = StringEquals(mode, "roundtrip");
+  static const auto mode_info = [] {
+    const char* mode = GetEnvNonEmpty("MOCKTAIL_FULLSCREEN_READINESS");
+    const bool single = StringEquals(mode, "1");
+    const bool round = StringEquals(mode, "roundtrip");
+    return std::make_pair(single, round);
+  }();
+  const bool single_transition = mode_info.first;
+  const bool round_trip = mode_info.second;
   if ((!single_transition && !round_trip) || !HasPresentedFrame()) {
     return;
   }
