@@ -1,5 +1,6 @@
 #include "mocktail/audio/opensl_playback_runtime.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -8,7 +9,9 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "mocktail/audio/audio_sink.h"
 #include "mocktail/audio/opensl_simple_buffer_queue.h"
@@ -89,6 +92,9 @@ extern const abi::PlayTable kPlayTable;
 extern const abi::VolumeTable kVolumeTable;
 extern const abi::AndroidConfigurationTable kConfigurationTable;
 
+std::mutex g_active_objects_mutex;
+std::unordered_set<RuntimeObject*> g_active_objects;
+
 struct RuntimeObject {
   explicit RuntimeObject(RuntimeObjectKind object_kind) : kind(object_kind) {
     object_handle = ObjectHandle{&kObjectTable, this};
@@ -96,6 +102,13 @@ struct RuntimeObject {
     play_handle = PlayHandle{&kPlayTable, this};
     volume_handle = VolumeHandle{&kVolumeTable, this};
     configuration_handle = ConfigurationHandle{&kConfigurationTable, this};
+    std::lock_guard<std::mutex> lock(g_active_objects_mutex);
+    g_active_objects.insert(this);
+  }
+
+  ~RuntimeObject() {
+    std::lock_guard<std::mutex> lock(g_active_objects_mutex);
+    g_active_objects.erase(this);
   }
 
   abi::Object ObjectInterface() {
@@ -133,6 +146,9 @@ struct RuntimeObject {
   abi::Int32 priority = 0;
   abi::Boolean preemptable = abi::kBooleanFalse;
 
+  RuntimeObject* parent_engine = nullptr;
+  std::vector<RuntimeObject*> children;
+
   PcmSpec pcm_spec;
   abi::Uint32 queue_capacity = 0;
   bool expose_queue = false;
@@ -156,8 +172,14 @@ RuntimeObject* FromObject(abi::Object self) {
   }
   const auto* handle = reinterpret_cast<const ObjectHandle*>(self);
   RuntimeObject* object = handle->object;
-  return object != nullptr && object->magic == kRuntimeObjectMagic ? object
-                                                                  : nullptr;
+  if (object == nullptr) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
+  if (g_active_objects.find(object) == g_active_objects.end()) {
+    return nullptr;
+  }
+  return object->magic == kRuntimeObjectMagic ? object : nullptr;
 }
 
 RuntimeObject* FromEngine(abi::Engine self) {
@@ -166,8 +188,14 @@ RuntimeObject* FromEngine(abi::Engine self) {
   }
   const auto* handle = reinterpret_cast<const EngineHandle*>(self);
   RuntimeObject* object = handle->object;
-  return object != nullptr && object->magic == kRuntimeObjectMagic ? object
-                                                                  : nullptr;
+  if (object == nullptr) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
+  if (g_active_objects.find(object) == g_active_objects.end()) {
+    return nullptr;
+  }
+  return object->magic == kRuntimeObjectMagic ? object : nullptr;
 }
 
 RuntimeObject* FromPlay(abi::Play self) {
@@ -176,8 +204,14 @@ RuntimeObject* FromPlay(abi::Play self) {
   }
   const auto* handle = reinterpret_cast<const PlayHandle*>(self);
   RuntimeObject* object = handle->object;
-  return object != nullptr && object->magic == kRuntimeObjectMagic ? object
-                                                                  : nullptr;
+  if (object == nullptr) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
+  if (g_active_objects.find(object) == g_active_objects.end()) {
+    return nullptr;
+  }
+  return object->magic == kRuntimeObjectMagic ? object : nullptr;
 }
 
 RuntimeObject* FromVolume(abi::Volume self) {
@@ -186,8 +220,14 @@ RuntimeObject* FromVolume(abi::Volume self) {
   }
   const auto* handle = reinterpret_cast<const VolumeHandle*>(self);
   RuntimeObject* object = handle->object;
-  return object != nullptr && object->magic == kRuntimeObjectMagic ? object
-                                                                  : nullptr;
+  if (object == nullptr) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
+  if (g_active_objects.find(object) == g_active_objects.end()) {
+    return nullptr;
+  }
+  return object->magic == kRuntimeObjectMagic ? object : nullptr;
 }
 
 RuntimeObject* FromConfiguration(abi::AndroidConfiguration self) {
@@ -196,8 +236,14 @@ RuntimeObject* FromConfiguration(abi::AndroidConfiguration self) {
   }
   const auto* handle = reinterpret_cast<const ConfigurationHandle*>(self);
   RuntimeObject* object = handle->object;
-  return object != nullptr && object->magic == kRuntimeObjectMagic ? object
-                                                                  : nullptr;
+  if (object == nullptr) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
+  if (g_active_objects.find(object) == g_active_objects.end()) {
+    return nullptr;
+  }
+  return object->magic == kRuntimeObjectMagic ? object : nullptr;
 }
 
 bool InterfaceIdEquals(abi::InterfaceId left, abi::InterfaceId right) {
@@ -552,6 +598,23 @@ void ObjectDestroy(abi::Object self) {
     return;
   }
 
+  if (object->parent_engine != nullptr) {
+    std::lock_guard<std::mutex> lock(object->parent_engine->mutex);
+    auto& ch = object->parent_engine->children;
+    ch.erase(std::remove(ch.begin(), ch.end(), object), ch.end());
+    object->parent_engine = nullptr;
+  }
+
+  std::vector<RuntimeObject*> children_to_destroy;
+  if (object->kind == RuntimeObjectKind::kEngine) {
+    std::lock_guard<std::mutex> lock(object->mutex);
+    children_to_destroy = std::move(object->children);
+  }
+  for (auto* child : children_to_destroy) {
+    child->parent_engine = nullptr;
+    ObjectDestroy(child->ObjectInterface());
+  }
+
   std::unique_ptr<OpenSlSimpleBufferQueueAdapter> queue_adapter;
   const bool is_player = object->kind == RuntimeObjectKind::kPlayer;
   {
@@ -687,6 +750,11 @@ abi::Result EngineCreateAudioPlayer(
   if (object == nullptr) {
     return abi::kResultMemoryFailure;
   }
+  object->parent_engine = engine;
+  {
+    std::lock_guard<std::mutex> lock(engine->mutex);
+    engine->children.push_back(object);
+  }
   object->pcm_spec = pcm_spec;
   object->queue_capacity = queue_capacity;
   object->expose_queue = expose_queue;
@@ -762,6 +830,11 @@ abi::Result EngineCreateOutputMix(abi::Engine self, abi::Object* mix,
       new (std::nothrow) RuntimeObject(RuntimeObjectKind::kOutputMix);
   if (object == nullptr) {
     return abi::kResultMemoryFailure;
+  }
+  object->parent_engine = engine;
+  {
+    std::lock_guard<std::mutex> lock(engine->mutex);
+    engine->children.push_back(object);
   }
   *mix = object->ObjectInterface();
   return abi::kResultSuccess;
