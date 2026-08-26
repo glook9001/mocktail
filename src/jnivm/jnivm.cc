@@ -6020,8 +6020,8 @@ void VM::InitJNIFunctionTables() {
 
   native_interface_.GetStaticMethodID =
       [](JNIEnv* /*env*/, jclass clazz, const char* name, const char* sig) -> jmethodID {
-    auto cls = ClassFromJClass(clazz);
-    if (TraceEnabled()) {
+    if (__builtin_expect(TraceEnabled(), 0)) {
+      auto cls = ClassFromJClass(clazz);
       std::cout << "  [JNI] GetStaticMethodID for class "
                 << (cls ? cls->GetName() : "unknown") << ": "
                 << (name ? name : "null") << " " << (sig ? sig : "null")
@@ -6032,8 +6032,8 @@ void VM::InitJNIFunctionTables() {
 
   native_interface_.GetMethodID =
       [](JNIEnv* /*env*/, jclass clazz, const char* name, const char* sig) -> jmethodID {
-    auto cls = ClassFromJClass(clazz);
-    if (TraceEnabled()) {
+    if (__builtin_expect(TraceEnabled(), 0)) {
+      auto cls = ClassFromJClass(clazz);
       std::cout << "  [JNI] GetMethodID for class "
                 << (cls ? cls->GetName() : "unknown") << ": "
                 << (name ? name : "null") << " " << (sig ? sig : "null")
@@ -6044,8 +6044,8 @@ void VM::InitJNIFunctionTables() {
 
   native_interface_.GetStaticFieldID =
       [](JNIEnv* /*env*/, jclass clazz, const char* name, const char* sig) -> jfieldID {
-    auto cls = ClassFromJClass(clazz);
-    if (TraceEnabled()) {
+    if (__builtin_expect(TraceEnabled(), 0)) {
+      auto cls = ClassFromJClass(clazz);
       std::cout << "  [JNI] GetStaticFieldID for class "
                 << (cls ? cls->GetName() : "unknown") << ": "
                 << (name ? name : "null") << " " << (sig ? sig : "null")
@@ -6056,8 +6056,8 @@ void VM::InitJNIFunctionTables() {
 
   native_interface_.GetFieldID =
       [](JNIEnv* /*env*/, jclass clazz, const char* name, const char* sig) -> jfieldID {
-    auto cls = ClassFromJClass(clazz);
-    if (TraceEnabled()) {
+    if (__builtin_expect(TraceEnabled(), 0)) {
+      auto cls = ClassFromJClass(clazz);
       std::cout << "  [JNI] GetFieldID for class "
                 << (cls ? cls->GetName() : "unknown") << ": "
                 << (name ? name : "null") << " " << (sig ? sig : "null")
