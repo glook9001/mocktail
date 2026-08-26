@@ -13,6 +13,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace mocktail::audio {
 namespace {
@@ -149,12 +150,24 @@ struct OpenSlSimpleBufferQueueAdapter::State
     }
     const std::shared_ptr<State> state = raw_state->shared_from_this();
     std::lock_guard<std::mutex> operation_lock(state->sink_operation_mutex);
+    std::vector<ReleaseTicket*> tickets_to_delete;
     {
       std::lock_guard<std::mutex> lock(state->mutex);
       if (state->stopping) {
         return opensl_abi::kResultPreconditionsViolated;
       }
       ++state->generation;
+      tickets_to_delete.reserve(state->pending.size());
+      for (const auto& entry : state->pending) {
+        if (entry.second != nullptr) {
+          tickets_to_delete.push_back(entry.second);
+        }
+      }
+      state->discarded_buffers += state->pending.size();
+      state->pending.clear();
+    }
+    for (auto* ticket : tickets_to_delete) {
+      delete ticket;
     }
     const Status status = state->sink->Clear();
     if (!status.ok()) {
@@ -519,14 +532,25 @@ void OpenSlSimpleBufferQueueAdapter::Shutdown() {
   }
   state->JoinCallbackThread();
 
+  std::vector<State::ReleaseTicket*> orphan_tickets;
   {
     std::lock_guard<std::mutex> lock(state->mutex);
     if (!state->pending.empty()) {
       state->last_status = Status::Error(
           StatusCode::kPlatformError,
           "audio sink did not release all borrowed OpenSL buffers");
+      orphan_tickets.reserve(state->pending.size());
+      for (const auto& entry : state->pending) {
+        if (entry.second != nullptr) {
+          orphan_tickets.push_back(entry.second);
+        }
+      }
+      state->pending.clear();
     }
     state->shutdown_complete = true;
+  }
+  for (auto* ticket : orphan_tickets) {
+    delete ticket;
   }
   state->shutdown_cv.notify_all();
 }
