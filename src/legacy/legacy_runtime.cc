@@ -2,12 +2,14 @@
 #include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <link.h>
+#include <malloc.h>
 #include <iomanip>
 #include <iostream>
 #include <csignal>
@@ -3191,6 +3193,17 @@ void PumpRobloxMainThreadMessagesOnce() {
     std::cerr << "  [main] nativeCallMessagesFromMainThread recovered\n"
               << std::flush;
   }
+#if defined(__GLIBC__)
+  static auto last_trim_time = std::chrono::steady_clock::now();
+  if (pump_count % 600 == 0) {
+    const auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_trim_time)
+            .count() >= 15) {
+      last_trim_time = now;
+      malloc_trim(0);
+    }
+  }
+#endif
 }
 
 void PumpStartupOwnerThread(void* /*context*/) {
