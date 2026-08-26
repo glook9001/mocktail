@@ -29129,16 +29129,20 @@ jobject BuildDeviceParams(JNIEnv* env) {
   SetStringField(env, params, "appBuildVariant", "googleProdRelease");
   SetStringField(env, params, "testDeviceName", device_name.c_str());
 
-  SetIntField(env, params, "deviceTotalMemoryMB", 4096);
+  const bool is_low_ram = !IsEnabled("MOCKTAIL_DISABLE_LOW_RAM_DEVICE");
+  SetIntField(env, params, "deviceTotalMemoryMB", is_low_ram ? 2048 : 4096);
   SetIntField(env, params, "displayPhysicalWidthPixels", 1280);
   SetIntField(env, params, "displayPhysicalHeightPixels", 720);
-  SetIntField(env, params, "memoryClass", 512);
-  SetIntField(env, params, "largeMemoryClass", 1024);
-  SetLongField(env, params, "lowMemoryKillerBackgroundAppThreshold", 0);
-  SetLongField(env, params, "lowMemoryKillerForegroundAppThreshold", 0);
+  SetIntField(env, params, "memoryClass", is_low_ram ? 256 : 512);
+  SetIntField(env, params, "largeMemoryClass", is_low_ram ? 512 : 1024);
+  SetLongField(env, params, "lowMemoryKillerBackgroundAppThreshold",
+               is_low_ram ? 256 : 0);
+  SetLongField(env, params, "lowMemoryKillerForegroundAppThreshold",
+               is_low_ram ? 512 : 0);
   SetBooleanField(env, params, "cpu64Bit", JNI_TRUE);
   SetBooleanField(env, params, "isChrome", JNI_FALSE);
-  SetBooleanField(env, params, "isLowRamDevice", JNI_FALSE);
+  SetBooleanField(env, params, "isLowRamDevice",
+                  is_low_ram ? JNI_TRUE : JNI_FALSE);
   return params;
 }
 

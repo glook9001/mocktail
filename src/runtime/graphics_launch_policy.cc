@@ -60,10 +60,12 @@ bool ApplyGraphicsLaunchPolicy(const RuntimeConfig& config,
     return false;
   }
 
-  if (direct_vulkan &&
-      !SetDefault("MOCKTAIL_CLIENT_SETTINGS_OVERRIDES_JSON",
-                  kVulkanClientSettingsOverrides, error)) {
-    return false;
+  if (direct_vulkan) {
+    if (!SetDefault("MOCKTAIL_CLIENT_SETTINGS_OVERRIDES_JSON",
+                    kVulkanClientSettingsOverrides, error) ||
+        !SetDefault("ANV_SYS_MEM_LIMIT", "1024", error)) {
+      return false;
+    }
   }
   return true;
 }
