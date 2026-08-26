@@ -168,8 +168,8 @@ struct AdapterState {
   std::mutex mutex;
   mocktail::graphics::SdlVulkanWsi host_wsi;
   mocktail::graphics::AndroidVulkanWsiAdapter android_wsi;
-  PFN_vkGetInstanceProcAddr host_get_instance_proc_addr = nullptr;
-  PFN_vkGetDeviceProcAddr host_get_device_proc_addr = nullptr;
+  std::atomic<PFN_vkGetInstanceProcAddr> host_get_instance_proc_addr{nullptr};
+  std::atomic<PFN_vkGetDeviceProcAddr> host_get_device_proc_addr{nullptr};
   std::vector<DeviceDispatch> device_dispatches;
   std::vector<QueueBinding> queue_bindings;
   std::vector<CommandBufferBinding> command_buffer_bindings;
@@ -259,10 +259,11 @@ bool EnsureInitialized() {
     state.host_wsi.Shutdown();
     return false;
   }
-  state.host_get_instance_proc_addr =
+  state.host_get_instance_proc_addr.store(
       reinterpret_cast<PFN_vkGetInstanceProcAddr>(
-          state.host_wsi.GetInstanceProcAddress());
-  if (state.host_get_instance_proc_addr == nullptr) {
+          state.host_wsi.GetInstanceProcAddress()),
+      std::memory_order_release);
+  if (state.host_get_instance_proc_addr.load(std::memory_order_acquire) == nullptr) {
     state.android_wsi.Shutdown();
     state.host_wsi.Shutdown();
     return false;
@@ -289,22 +290,20 @@ VkResult NormalizeSwapchainResult(VkResult result) {
 }
 
 PFN_vkVoidFunction HostInstanceProc(VkInstance instance, const char* name) {
-  if (!EnsureInitialized() || name == nullptr) {
+  if (__builtin_expect(!EnsureInitialized() || name == nullptr, 0)) {
     return nullptr;
   }
-  return State().host_get_instance_proc_addr(instance, name);
+  const PFN_vkGetInstanceProcAddr get_proc =
+      State().host_get_instance_proc_addr.load(std::memory_order_acquire);
+  return get_proc != nullptr ? get_proc(instance, name) : nullptr;
 }
 
 PFN_vkVoidFunction HostDeviceProc(VkDevice device, const char* name) {
-  if (!EnsureInitialized() || name == nullptr) {
+  if (__builtin_expect(!EnsureInitialized() || name == nullptr, 0)) {
     return nullptr;
   }
-  PFN_vkGetDeviceProcAddr host_get_device_proc_addr = nullptr;
-  {
-    AdapterState& state = State();
-    std::lock_guard<std::mutex> lock(state.mutex);
-    host_get_device_proc_addr = state.host_get_device_proc_addr;
-  }
+  const PFN_vkGetDeviceProcAddr host_get_device_proc_addr =
+      State().host_get_device_proc_addr.load(std::memory_order_acquire);
   return host_get_device_proc_addr != nullptr
              ? host_get_device_proc_addr(device, name)
              : nullptr;
@@ -947,8 +946,12 @@ vkCreateInstance(const VkInstanceCreateInfo* create_info,
     std::lock_guard<std::mutex> lock(state.mutex);
     ++state.active_instance_count;
     state.latest_instance = *instance;
-    state.host_get_device_proc_addr = reinterpret_cast<PFN_vkGetDeviceProcAddr>(
-        state.host_get_instance_proc_addr(*instance, "vkGetDeviceProcAddr"));
+    const auto get_inst_proc =
+        state.host_get_instance_proc_addr.load(std::memory_order_acquire);
+    state.host_get_device_proc_addr.store(
+        reinterpret_cast<PFN_vkGetDeviceProcAddr>(
+            get_inst_proc(*instance, "vkGetDeviceProcAddr")),
+        std::memory_order_release);
     std::fprintf(stderr, "  [vulkan] host VkInstance created\n");
     if (host_application_info.apiVersion != requested_api) {
       std::fprintf(stderr,
@@ -974,8 +977,8 @@ vkDestroyInstance(VkInstance instance, const VkAllocationCallbacks* allocator) {
   if (state.active_instance_count == 0 && state.initialized) {
     state.android_wsi.Shutdown();
     state.host_wsi.Shutdown();
-    state.host_get_instance_proc_addr = nullptr;
-    state.host_get_device_proc_addr = nullptr;
+    state.host_get_instance_proc_addr.store(nullptr, std::memory_order_release);
+    state.host_get_device_proc_addr.store(nullptr, std::memory_order_release);
     state.device_dispatches.clear();
     state.queue_bindings.clear();
     state.command_buffer_bindings.clear();
@@ -1093,15 +1096,11 @@ vkGetInstanceProcAddr(VkInstance instance, const char* name) {
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device,
                                                              const char* name) {
-  if (name == nullptr || !EnsureInitialized()) {
+  if (__builtin_expect(name == nullptr, 0) || !EnsureInitialized()) {
     return nullptr;
   }
-  AdapterState& state = State();
-  PFN_vkGetDeviceProcAddr host_get_device_proc_addr = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(state.mutex);
-    host_get_device_proc_addr = state.host_get_device_proc_addr;
-  }
+  const PFN_vkGetDeviceProcAddr host_get_device_proc_addr =
+      State().host_get_device_proc_addr.load(std::memory_order_acquire);
   const PFN_vkVoidFunction host = host_get_device_proc_addr != nullptr
                                       ? host_get_device_proc_addr(device, name)
                                       : nullptr;
@@ -1124,8 +1123,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(
     AdapterState& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
     instance = state.latest_instance;
-    host_get_instance_proc_addr = state.host_get_instance_proc_addr;
-    host_get_device_proc_addr = state.host_get_device_proc_addr;
+    host_get_instance_proc_addr =
+        state.host_get_instance_proc_addr.load(std::memory_order_acquire);
+    host_get_device_proc_addr =
+        state.host_get_device_proc_addr.load(std::memory_order_acquire);
   }
   const auto host_create = reinterpret_cast<PFN_vkCreateDevice>(
       HostInstanceProc(instance, "vkCreateDevice"));
