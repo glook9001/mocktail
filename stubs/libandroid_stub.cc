@@ -29,6 +29,8 @@
 #include <string>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // Read-only asset access
@@ -107,11 +109,34 @@ bool FileExists(const std::string& path) {
   return !path.empty() && ::stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
+struct AssetLookupCache {
+  std::mutex mutex;
+  std::unordered_map<std::string, std::string> resolved_paths;
+  std::unordered_set<std::string> missing_paths;
+};
+
+AssetLookupCache g_asset_lookup_cache;
+
 std::string ResolveAssetPath(const char* filename) {
+  if (filename == nullptr) {
+    return {};
+  }
   std::string requested = StripAssetUriPrefix(filename);
   if (HasUnsafePathSegment(requested)) {
     return {};
   }
+
+  {
+    std::scoped_lock lock(g_asset_lookup_cache.mutex);
+    if (g_asset_lookup_cache.missing_paths.count(requested) != 0) {
+      return {};
+    }
+    auto it = g_asset_lookup_cache.resolved_paths.find(requested);
+    if (it != g_asset_lookup_cache.resolved_paths.end()) {
+      return it->second;
+    }
+  }
+
   const char* root_env = GetEnvNonEmpty("MOCKTAIL_ASSET_ROOT");
   std::string root = root_env != nullptr ? root_env : "rbx_bin/assets";
   std::string stripped = StripAndroidAssetPrefix(requested);
@@ -124,10 +149,16 @@ std::string ResolveAssetPath(const char* filename) {
   };
   for (const std::string& candidate : candidates) {
     if (FileExists(candidate)) {
+      std::scoped_lock lock(g_asset_lookup_cache.mutex);
+      g_asset_lookup_cache.resolved_paths.emplace(requested, candidate);
       return candidate;
     }
   }
 
+  {
+    std::scoped_lock lock(g_asset_lookup_cache.mutex);
+    g_asset_lookup_cache.missing_paths.insert(requested);
+  }
   return {};
 }
 
