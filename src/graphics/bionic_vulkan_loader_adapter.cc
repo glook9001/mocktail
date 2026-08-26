@@ -309,7 +309,40 @@ PFN_vkVoidFunction HostDeviceProc(VkDevice device, const char* name) {
              : nullptr;
 }
 
+struct FastQueueDispatchCache {
+  std::atomic<VkQueue> cached_queue{VK_NULL_HANDLE};
+  AdapterState::DeviceDispatch dispatch{};
+};
+static FastQueueDispatchCache g_fast_queue_dispatch;
+
+struct FastCommandBufferDispatchCache {
+  std::atomic<VkCommandBuffer> cached_command_buffer{VK_NULL_HANDLE};
+  AdapterState::DeviceDispatch dispatch{};
+};
+static FastCommandBufferDispatchCache g_fast_command_buffer_dispatch;
+
+struct FastDeviceDispatchCache {
+  std::atomic<VkDevice> cached_device{VK_NULL_HANDLE};
+  AdapterState::DeviceDispatch dispatch{};
+};
+static FastDeviceDispatchCache g_fast_device_dispatch;
+
+void InvalidateFastDispatchCaches() {
+  g_fast_queue_dispatch.cached_queue.store(VK_NULL_HANDLE,
+                                           std::memory_order_release);
+  g_fast_command_buffer_dispatch.cached_command_buffer.store(
+      VK_NULL_HANDLE, std::memory_order_release);
+  g_fast_device_dispatch.cached_device.store(VK_NULL_HANDLE,
+                                             std::memory_order_release);
+}
+
 AdapterState::DeviceDispatch HostDispatchForQueue(VkQueue queue) {
+  if (__builtin_expect(queue != VK_NULL_HANDLE &&
+                           g_fast_queue_dispatch.cached_queue.load(
+                               std::memory_order_relaxed) == queue,
+                       1)) {
+    return g_fast_queue_dispatch.dispatch;
+  }
   AdapterState& state = State();
   std::lock_guard<std::mutex> lock(state.mutex);
   const auto binding =
@@ -325,11 +358,21 @@ AdapterState::DeviceDispatch HostDispatchForQueue(VkQueue queue) {
       [binding](const AdapterState::DeviceDispatch& candidate) {
         return candidate.device == binding->device;
       });
-  return dispatch != state.device_dispatches.end() ? *dispatch
-                                                    : AdapterState::DeviceDispatch{};
+  if (dispatch != state.device_dispatches.end()) {
+    g_fast_queue_dispatch.dispatch = *dispatch;
+    g_fast_queue_dispatch.cached_queue.store(queue, std::memory_order_release);
+    return *dispatch;
+  }
+  return {};
 }
 
 AdapterState::DeviceDispatch HostDispatchForDevice(VkDevice device) {
+  if (__builtin_expect(device != VK_NULL_HANDLE &&
+                           g_fast_device_dispatch.cached_device.load(
+                               std::memory_order_relaxed) == device,
+                       1)) {
+    return g_fast_device_dispatch.dispatch;
+  }
   AdapterState& state = State();
   std::lock_guard<std::mutex> lock(state.mutex);
   const auto dispatch = std::find_if(
@@ -337,13 +380,24 @@ AdapterState::DeviceDispatch HostDispatchForDevice(VkDevice device) {
       [device](const AdapterState::DeviceDispatch& candidate) {
         return candidate.device == device;
       });
-  return dispatch != state.device_dispatches.end()
-             ? *dispatch
-             : AdapterState::DeviceDispatch{};
+  if (dispatch != state.device_dispatches.end()) {
+    g_fast_device_dispatch.dispatch = *dispatch;
+    g_fast_device_dispatch.cached_device.store(device,
+                                               std::memory_order_release);
+    return *dispatch;
+  }
+  return {};
 }
 
 AdapterState::DeviceDispatch HostDispatchForCommandBuffer(
     VkCommandBuffer command_buffer) {
+  if (__builtin_expect(
+          command_buffer != VK_NULL_HANDLE &&
+              g_fast_command_buffer_dispatch.cached_command_buffer.load(
+                  std::memory_order_relaxed) == command_buffer,
+          1)) {
+    return g_fast_command_buffer_dispatch.dispatch;
+  }
   AdapterState& state = State();
   std::lock_guard<std::mutex> lock(state.mutex);
   const auto binding = std::find_if(
@@ -360,9 +414,13 @@ AdapterState::DeviceDispatch HostDispatchForCommandBuffer(
       [binding](const AdapterState::DeviceDispatch& candidate) {
         return candidate.device == binding->device;
       });
-  return dispatch != state.device_dispatches.end()
-             ? *dispatch
-             : AdapterState::DeviceDispatch{};
+  if (dispatch != state.device_dispatches.end()) {
+    g_fast_command_buffer_dispatch.dispatch = *dispatch;
+    g_fast_command_buffer_dispatch.cached_command_buffer.store(
+        command_buffer, std::memory_order_release);
+    return *dispatch;
+  }
+  return {};
 }
 
 void RegisterHostDeviceDispatch(VkDevice device,
@@ -417,6 +475,7 @@ void RegisterHostDeviceDispatch(VkDevice device,
   } else {
     state.device_dispatches.push_back(dispatch);
   }
+  InvalidateFastDispatchCaches();
 }
 
 void RegisterHostQueueBinding(VkDevice device, VkQueue queue) {
@@ -435,6 +494,7 @@ void RegisterHostQueueBinding(VkDevice device, VkQueue queue) {
   } else {
     state.queue_bindings.push_back({queue, device});
   }
+  InvalidateFastDispatchCaches();
 }
 
 void RegisterHostCommandBuffers(VkDevice device, VkCommandPool command_pool,
@@ -464,6 +524,7 @@ void RegisterHostCommandBuffers(VkDevice device, VkCommandPool command_pool,
           {command_buffer, device, command_pool});
     }
   }
+  InvalidateFastDispatchCaches();
 }
 
 void RemoveHostCommandBuffers(VkDevice device, VkCommandPool command_pool,
@@ -488,6 +549,7 @@ void RemoveHostCommandBuffers(VkDevice device, VkCommandPool command_pool,
                        command_buffers + command_buffer_count;
           }),
       state.command_buffer_bindings.end());
+  InvalidateFastDispatchCaches();
 }
 
 void RemoveHostCommandPoolBindings(VkDevice device,
@@ -504,6 +566,7 @@ void RemoveHostCommandPoolBindings(VkDevice device,
                    binding.command_pool == command_pool;
           }),
       state.command_buffer_bindings.end());
+  InvalidateFastDispatchCaches();
 }
 
 void RemoveHostDeviceDispatch(VkDevice device) {
@@ -524,12 +587,13 @@ void RemoveHostDeviceDispatch(VkDevice device) {
           }),
       state.command_buffer_bindings.end());
   state.device_dispatches.erase(
-      std::remove_if(
-          state.device_dispatches.begin(), state.device_dispatches.end(),
-          [device](const AdapterState::DeviceDispatch& dispatch) {
-            return dispatch.device == device;
-          }),
+      std::remove_if(state.device_dispatches.begin(),
+                     state.device_dispatches.end(),
+                     [device](const AdapterState::DeviceDispatch& candidate) {
+                       return candidate.device == device;
+                     }),
       state.device_dispatches.end());
+  InvalidateFastDispatchCaches();
 }
 
 bool IsHostWsiExtension(const char* name) {
