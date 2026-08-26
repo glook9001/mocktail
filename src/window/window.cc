@@ -164,15 +164,19 @@ bool TraceFlagEnabled(const char* name) {
 }
 
 bool WindowTraceEnabled() {
-  return TraceFlagEnabled("MOCKTAIL_WINDOW_TRACE") ||
-         TraceFlagEnabled("MOCKTAIL_TRACE_ALL") ||
-         TraceFlagEnabled("MOCKTAIL_FULL_TRACE");
+  static const bool enabled =
+      TraceFlagEnabled("MOCKTAIL_WINDOW_TRACE") ||
+      TraceFlagEnabled("MOCKTAIL_TRACE_ALL") ||
+      TraceFlagEnabled("MOCKTAIL_FULL_TRACE");
+  return enabled;
 }
 
 bool SdlEventTraceEnabled() {
-  return TraceFlagEnabled("MOCKTAIL_SDL_EVENT_TRACE") ||
-         TraceFlagEnabled("MOCKTAIL_TRACE_ALL") ||
-         TraceFlagEnabled("MOCKTAIL_FULL_TRACE");
+  static const bool enabled =
+      TraceFlagEnabled("MOCKTAIL_SDL_EVENT_TRACE") ||
+      TraceFlagEnabled("MOCKTAIL_TRACE_ALL") ||
+      TraceFlagEnabled("MOCKTAIL_FULL_TRACE");
+  return enabled;
 }
 
 const char* GetEnvNonEmpty(const char* name) {
@@ -193,10 +197,12 @@ bool IsDisabledEnv(const char* name) {
 }
 
 bool WindowStatePersistenceSuppressed() {
-  return IsEnabledEnv("MOCKTAIL_RESIZE_READINESS") ||
-         IsEnabledEnv("MOCKTAIL_FULLSCREEN_READINESS") ||
-         IsEnabledEnv("MOCKTAIL_INPUT_READINESS") ||
-         IsEnabledEnv("MOCKTAIL_AUTO_EXIT_AFTER_PRESENT_MS");
+  static const bool suppressed =
+      IsEnabledEnv("MOCKTAIL_RESIZE_READINESS") ||
+      IsEnabledEnv("MOCKTAIL_FULLSCREEN_READINESS") ||
+      IsEnabledEnv("MOCKTAIL_INPUT_READINESS") ||
+      IsEnabledEnv("MOCKTAIL_AUTO_EXIT_AFTER_PRESENT_MS");
+  return suppressed;
 }
 
 bool IsWaylandVideoDriver() {
