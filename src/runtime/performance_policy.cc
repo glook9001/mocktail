@@ -241,7 +241,7 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
     const std::string workers = std::to_string(render_worker_count);
     const std::string occlusion_workers =
         std::to_string(std::max(1, render_worker_count / 2));
-    const std::array<ClientSetting, 49> rendering_settings = {{
+    const std::array<ClientSetting, 57> rendering_settings = {{
         {"FIntSmoothClusterTaskQueueMaxParallelTasks", workers},
         {"FIntOcclusionWorkerThreadCount", occlusion_workers},
         {"FFlagMovePrerenderV2", "True"},
@@ -270,7 +270,7 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
         {"FIntDefaultMeshCacheSizeMB", "128"},
         {"FIntRenderMeshOrphanBudgetMB", "16"},
         {"FIntTerrainGpuMeshMemoryTargetMib", "64"},
-        {"FIntAvatarMeshMemoryMax", "67108864"},
+        {"FIntAvatarMeshMemoryMax", "33554432"},
         {"FIntSmoothTerrainPhysicsCacheSize", "64"},
         {"FIntRenderTextureTotalBudgetMB", "256"},
         {"FIntRenderTextureOrphanBudgetMB", "16"},
@@ -291,6 +291,14 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
         {"FIntMeshContentProviderForceCacheSize", "64"},
         {"FIntSlimContentProviderForceCacheSize", "64"},
         {"FIntInitialAudioAssetCacheSize", "32"},
+        {"FIntAvatarTextureMemoryMax", "33554432"},
+        {"FFlagEnableSLIMAvatars", "True"},
+        {"FFlagEnableSlimAvatarsDefaultEnabled", "True"},
+        {"FFlagLayeredClothingCacheOptimizations", "True"},
+        {"FFlagRenderAllocateShadowMapResourcesOnDemand", "True"},
+        {"FIntRenderShadowMapDepthCacheMemLimit", "16"},
+        {"FIntTM2ShadowMapMaxMips", "1"},
+        {"FIntDebugFRMQualityLevelOverride", "3"},
     }};
     if (!apply_settings(rendering_settings)) {
       return false;
