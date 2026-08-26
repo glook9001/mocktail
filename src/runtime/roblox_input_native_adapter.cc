@@ -289,6 +289,17 @@ Status RobloxInputNativeAdapter::MouseMove(float x, float y, float delta_x,
 
 Status RobloxInputNativeAdapter::MouseButton(float x, float y, bool pressed,
                                              int32_t button) {
+  if (__builtin_expect(symbols_.pass_mouse_button != nullptr && initialized_ &&
+                           native_input_class_ != nullptr,
+                       1)) {
+    JNIEnv* env = nullptr;
+    if (__builtin_expect(environment_.Acquire(&env).ok() && env != nullptr,
+                         1)) {
+      symbols_.pass_mouse_button(env, native_input_class_, x, y,
+                                 pressed ? JNI_TRUE : JNI_FALSE, button);
+      return Status::Ok();
+    }
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   if (symbols_.pass_mouse_button == nullptr) {
     return Unsupported("nativePassMouseButton is unavailable");
@@ -304,6 +315,16 @@ Status RobloxInputNativeAdapter::MouseButton(float x, float y, bool pressed,
 }
 
 Status RobloxInputNativeAdapter::MouseWheel(float x, float y, float delta_y) {
+  if (__builtin_expect(symbols_.pass_mouse_wheel != nullptr && initialized_ &&
+                           native_input_class_ != nullptr,
+                       1)) {
+    JNIEnv* env = nullptr;
+    if (__builtin_expect(environment_.Acquire(&env).ok() && env != nullptr,
+                         1)) {
+      symbols_.pass_mouse_wheel(env, native_input_class_, x, y, delta_y);
+      return Status::Ok();
+    }
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   if (symbols_.pass_mouse_wheel == nullptr) {
     return Unsupported("nativePassMouseWheel is unavailable");
@@ -320,6 +341,17 @@ Status RobloxInputNativeAdapter::MouseWheel(float x, float y, float delta_y) {
 Status RobloxInputNativeAdapter::Touch(int32_t pointer_id, float x, float y,
                                        int32_t action, int32_t width,
                                        int32_t height) {
+  if (__builtin_expect(symbols_.pass_input != nullptr && initialized_ &&
+                           native_input_class_ != nullptr,
+                       1)) {
+    JNIEnv* env = nullptr;
+    if (__builtin_expect(environment_.Acquire(&env).ok() && env != nullptr,
+                         1)) {
+      symbols_.pass_input(env, native_input_class_, pointer_id, x, y, action,
+                          width, height);
+      return Status::Ok();
+    }
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   if (symbols_.pass_input == nullptr) {
     return Unsupported("nativePassInput is unavailable");
@@ -336,6 +368,18 @@ Status RobloxInputNativeAdapter::Touch(int32_t pointer_id, float x, float y,
 
 Status RobloxInputNativeAdapter::Key(bool pressed, int32_t scan_code,
                                      int32_t key_code, bool repeat) {
+  if (__builtin_expect(symbols_.pass_key_event != nullptr && initialized_ &&
+                           native_gl_class_ != nullptr,
+                       1)) {
+    JNIEnv* env = nullptr;
+    if (__builtin_expect(environment_.Acquire(&env).ok() && env != nullptr,
+                         1)) {
+      symbols_.pass_key_event(env, native_gl_class_,
+                              pressed ? JNI_TRUE : JNI_FALSE, scan_code,
+                              key_code, repeat ? JNI_TRUE : JNI_FALSE);
+      return Status::Ok();
+    }
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   if (symbols_.pass_key_event == nullptr) {
     return Unsupported("nativePassKeyEvent is unavailable");

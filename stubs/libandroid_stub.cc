@@ -54,15 +54,19 @@ const char* GetEnvNonEmpty(const char* name) {
 }
 
 bool TraceEnabled() {
-  return GetEnvNonEmpty("MOCKTAIL_ANDROID_STUB_TRACE") != nullptr ||
-         GetEnvNonEmpty("MOCKTAIL_WINDOW_TRACE") != nullptr ||
-         GetEnvNonEmpty("MOCKTAIL_FULL_TRACE") != nullptr;
+  static const bool enabled =
+      GetEnvNonEmpty("MOCKTAIL_ANDROID_STUB_TRACE") != nullptr ||
+      GetEnvNonEmpty("MOCKTAIL_WINDOW_TRACE") != nullptr ||
+      GetEnvNonEmpty("MOCKTAIL_FULL_TRACE") != nullptr;
+  return enabled;
 }
 
 bool AssetTraceEnabled() {
-  return GetEnvNonEmpty("MOCKTAIL_ASSET_TRACE") != nullptr ||
-         GetEnvNonEmpty("MOCKTAIL_TRACE_ALL") != nullptr ||
-         GetEnvNonEmpty("MOCKTAIL_FULL_TRACE") != nullptr;
+  static const bool enabled =
+      GetEnvNonEmpty("MOCKTAIL_ASSET_TRACE") != nullptr ||
+      GetEnvNonEmpty("MOCKTAIL_TRACE_ALL") != nullptr ||
+      GetEnvNonEmpty("MOCKTAIL_FULL_TRACE") != nullptr;
+  return enabled;
 }
 
 std::string StripAssetUriPrefix(const char* filename) {
