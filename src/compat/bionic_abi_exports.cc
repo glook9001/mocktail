@@ -921,4 +921,5 @@ extern void* mocktail_gameactivity_on_resume_native;
 extern void* mocktail_gameactivity_on_surface_created_native;
 extern void* mocktail_gameactivity_on_surface_changed_native;
 extern void* mocktail_gameactivity_on_surface_redraw_needed_native;
+extern void* mocktail_gameactivity_on_trim_memory_native;
 }  // extern "C"

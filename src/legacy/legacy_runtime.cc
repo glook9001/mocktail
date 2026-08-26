@@ -2,12 +2,14 @@
 #include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <link.h>
+#include <malloc.h>
 #include <iomanip>
 #include <iostream>
 #include <csignal>
@@ -147,6 +149,8 @@ volatile uintptr_t g_stage6_jni_env = 0;
 volatile uintptr_t g_stage6_jni_functions = 0;
 volatile uintptr_t g_libroblox_base = 0;
 volatile uintptr_t g_game_activity_native_handle = 0;
+jobject g_saved_game_activity = nullptr;
+extern "C" void* mocktail_gameactivity_on_trim_memory_native;
 const char g_empty_c_string[] = "";
 volatile uintptr_t g_stage5_last_fallback_rip = 0;
 volatile sig_atomic_t g_jni_onload_in_progress = 0;
@@ -3111,6 +3115,29 @@ bool RunTaskSchedulerForegroundOnMainThread(
   }
 }
 
+typedef void (*GameActivityTrimMemoryFn)(JNIEnv* env, jobject activity,
+                                         jlong handle, jint level);
+
+void MocktailTrimEngineMemory(int level) {
+  if (mocktail_gameactivity_on_trim_memory_native == nullptr ||
+      g_game_activity_native_handle == 0) {
+    return;
+  }
+  JNIEnv* env = AttachMainThreadJniEnv();
+  if (env == nullptr) {
+    return;
+  }
+  auto* on_trim = reinterpret_cast<GameActivityTrimMemoryFn>(
+      mocktail_gameactivity_on_trim_memory_native);
+  if (on_trim != nullptr) {
+    static sigjmp_buf s_trim_jmp_buf;
+    if (sigsetjmp(s_trim_jmp_buf, 1) == 0) {
+      on_trim(env, g_saved_game_activity,
+              static_cast<jlong>(g_game_activity_native_handle), level);
+    }
+  }
+}
+
 void PumpRobloxMainThreadMessagesOnce() {
   if (g_main_thread_message_pump_ready.load() == 0 &&
       !IsEnabled("MOCKTAIL_FORCE_EARLY_MAIN_THREAD_MESSAGE_PUMP")) {
@@ -3187,6 +3214,18 @@ void PumpRobloxMainThreadMessagesOnce() {
     std::cerr << "  [main] nativeCallMessagesFromMainThread recovered\n"
               << std::flush;
   }
+#if defined(__GLIBC__)
+  static auto last_trim_time = std::chrono::steady_clock::now();
+  if (pump_count % 600 == 0) {
+    const auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_trim_time)
+            .count() >= 15) {
+      last_trim_time = now;
+      malloc_trim(0);
+      MocktailTrimEngineMemory(15 /* TRIM_MEMORY_RUNNING_CRITICAL */);
+    }
+  }
+#endif
 }
 
 void PumpStartupOwnerThread(void* /*context*/) {
@@ -30679,6 +30718,7 @@ void* EngineStartupThread(void* arg) {
         env->NewStringUTF("/sdcard/Android/data/com.roblox.client/files");
     if (sigsetjmp(g_game_activity_init_jmp_buf, 1) == 0) {
       g_game_activity_init_recovery_in_progress = 1;
+      g_saved_game_activity = game_activity;
       game_activity_handle = context->native_game_activity_init(
           env, game_activity, internal_data_dir, obb_dir, external_data_dir,
           game_activity_asset_manager, nullptr, game_activity_config);

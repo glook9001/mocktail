@@ -46,6 +46,7 @@ void* mocktail_gameactivity_on_resume_native = nullptr;
 void* mocktail_gameactivity_on_surface_created_native = nullptr;
 void* mocktail_gameactivity_on_surface_changed_native = nullptr;
 void* mocktail_gameactivity_on_surface_redraw_needed_native = nullptr;
+void* mocktail_gameactivity_on_trim_memory_native = nullptr;
 }
 
 namespace {
@@ -5968,6 +5969,8 @@ void VM::InitJNIFunctionTables() {
 	        mocktail_gameactivity_on_surface_changed_native = methods[i].fnPtr;
 	      } else if (std::strcmp(name, "onSurfaceRedrawNeededNative") == 0) {
 	        mocktail_gameactivity_on_surface_redraw_needed_native = methods[i].fnPtr;
+	      } else if (std::strcmp(name, "onTrimMemoryNative") == 0) {
+	        mocktail_gameactivity_on_trim_memory_native = methods[i].fnPtr;
 	      }
               if (cls != nullptr &&
                   cls->GetName() ==
