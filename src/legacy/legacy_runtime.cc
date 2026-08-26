@@ -3112,10 +3112,18 @@ bool RunTaskSchedulerForegroundOnMainThread(
 }
 
 void PumpRobloxMainThreadMessagesOnce() {
-  if (g_main_thread_message_pump_ready.load() == 0 &&
-      !IsEnabled("MOCKTAIL_FORCE_EARLY_MAIN_THREAD_MESSAGE_PUMP")) {
+  static const bool force_early =
+      IsEnabled("MOCKTAIL_FORCE_EARLY_MAIN_THREAD_MESSAGE_PUMP");
+  static const bool trace_pump =
+      IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP");
+  static const bool is_disabled =
+      IsDisabled("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP");
+  static const int pump_limit =
+      GetEnvInt("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP_LIMIT", 0);
+
+  if (g_main_thread_message_pump_ready.load() == 0 && !force_early) {
     static bool logged_not_ready = false;
-    if (!logged_not_ready && IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
+    if (!logged_not_ready && trace_pump) {
       logged_not_ready = true;
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump not ready\n"
                 << std::flush;
@@ -3125,10 +3133,9 @@ void PumpRobloxMainThreadMessagesOnce() {
 
   if (g_native_call_messages_from_main_thread == nullptr ||
       g_vm_for_main_thread_pump == nullptr ||
-      g_native_gl_class_for_main_thread == nullptr ||
-      IsDisabled("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP")) {
+      g_native_gl_class_for_main_thread == nullptr || is_disabled) {
     static bool logged_unavailable = false;
-    if (!logged_unavailable && IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
+    if (!logged_unavailable && trace_pump) {
       logged_unavailable = true;
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump unavailable"
                 << " fn="
@@ -3138,9 +3145,7 @@ void PumpRobloxMainThreadMessagesOnce() {
                 << " class="
                 << reinterpret_cast<const void*>(
                        g_native_gl_class_for_main_thread)
-                << " disabled="
-                << IsDisabled("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP")
-                << '\n'
+                << " disabled=" << is_disabled << '\n'
                 << std::flush;
     }
     return;
@@ -3149,7 +3154,7 @@ void PumpRobloxMainThreadMessagesOnce() {
   JNIEnv* env = AttachMainThreadJniEnv();
   if (env == nullptr) {
     static bool logged_missing_env = false;
-    if (!logged_missing_env && IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
+    if (!logged_missing_env && trace_pump) {
       logged_missing_env = true;
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump has no JNIEnv\n"
                 << std::flush;
@@ -3158,11 +3163,10 @@ void PumpRobloxMainThreadMessagesOnce() {
   }
   static int pump_count = 0;
   ++pump_count;
-  int pump_limit = GetEnvInt("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP_LIMIT", 0);
   if (pump_limit > 0 && pump_count > pump_limit) {
     return;
   }
-  if (IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
+  if (trace_pump) {
     if (pump_count <= 10 || pump_count % 100 == 0) {
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump #"
                 << pump_count << " env=" << static_cast<void*>(env) << '\n'
