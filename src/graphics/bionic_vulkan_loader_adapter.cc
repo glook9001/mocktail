@@ -1287,8 +1287,23 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
       swapchain == nullptr) {
     return VK_ERROR_INITIALIZATION_FAILED;
   }
+  VkSwapchainCreateInfoKHR modified_create_info = *create_info;
+  static const uint32_t target_min_images = [] {
+    const char* raw = std::getenv("MOCKTAIL_VULKAN_MIN_IMAGE_COUNT");
+    if (raw != nullptr && raw[0] != '\0') {
+      char* end = nullptr;
+      const unsigned long parsed = std::strtoul(raw, &end, 10);
+      if (end != raw && *end == '\0' && parsed >= 1 && parsed <= UINT32_MAX) {
+        return static_cast<uint32_t>(parsed);
+      }
+    }
+    return 4U;  // Quad-buffered depth eliminates drmSyncobj timeline presentation stalls
+  }();
+  if (modified_create_info.minImageCount < target_min_images) {
+    modified_create_info.minImageCount = target_min_images;
+  }
   const VkResult result =
-      host_create(device, create_info, allocator, swapchain);
+      host_create(device, &modified_create_info, allocator, swapchain);
   if (result != VK_SUCCESS) {
     return result;
   }
@@ -1709,9 +1724,27 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
   }
   const VkResult result =
       host_capabilities(physical_device, surface, capabilities);
-  if (result != VK_SUCCESS ||
-      (capabilities->currentExtent.width != UINT32_MAX &&
-       capabilities->currentExtent.height != UINT32_MAX)) {
+  if (result != VK_SUCCESS) {
+    return result;
+  }
+  static const uint32_t target_min_images = [] {
+    const char* raw = std::getenv("MOCKTAIL_VULKAN_MIN_IMAGE_COUNT");
+    if (raw != nullptr && raw[0] != '\0') {
+      char* end = nullptr;
+      const unsigned long parsed = std::strtoul(raw, &end, 10);
+      if (end != raw && *end == '\0' && parsed >= 1 && parsed <= UINT32_MAX) {
+        return static_cast<uint32_t>(parsed);
+      }
+    }
+    return 4U;
+  }();
+  if (target_min_images > capabilities->minImageCount &&
+      (capabilities->maxImageCount == 0 ||
+       target_min_images <= capabilities->maxImageCount)) {
+    capabilities->minImageCount = target_min_images;
+  }
+  if (capabilities->currentExtent.width != UINT32_MAX &&
+      capabilities->currentExtent.height != UINT32_MAX) {
     return result;
   }
 
