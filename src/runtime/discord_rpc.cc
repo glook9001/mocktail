@@ -636,7 +636,7 @@ class DiscordRpcSession::Impl final {
       condition_.notify_all();
     }
     if (worker_.joinable()) {
-      (void)worker_.WaitFor(2000, 1);
+      (void)worker_.WaitFor(-1, 1);
     }
     std::lock_guard<std::mutex> lock(mutex_);
     started_ = false;

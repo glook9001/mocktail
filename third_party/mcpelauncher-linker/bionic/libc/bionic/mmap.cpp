@@ -60,18 +60,12 @@ void* mmap64(void* addr, size_t size, int prot, int flags, int fd, off64_t offse
 
   void* result = __mmap2(addr, size, prot, flags, fd, offset >> MMAP2_SHIFT);
 
-  if (result != MAP_FAILED && is_private_anonymous && !is_stack_or_grows_down) {
+  if (result != MAP_FAILED && kernel_has_MADV_MERGEABLE &&
+      is_private_anonymous && !is_stack_or_grows_down) {
     ErrnoRestorer errno_restorer;
-#if defined(MADV_HUGEPAGE)
-    if (size >= 2 * 1024 * 1024) {
-      (void)madvise(result, size, MADV_HUGEPAGE);
-    }
-#endif
-    if (kernel_has_MADV_MERGEABLE) {
-      int rc = madvise(result, size, MADV_MERGEABLE);
-      if (rc == -1 && errno == EINVAL) {
-        kernel_has_MADV_MERGEABLE = false;
-      }
+    int rc = madvise(result, size, MADV_MERGEABLE);
+    if (rc == -1 && errno == EINVAL) {
+      kernel_has_MADV_MERGEABLE = false;
     }
   }
 

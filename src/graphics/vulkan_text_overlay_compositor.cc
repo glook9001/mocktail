@@ -811,9 +811,7 @@ VkResult VulkanTextOverlayCompositor::QueueSubmit(
   if (fallback == nullptr) {
     return VK_ERROR_INITIALIZATION_FAILED;
   }
-  if (impl_ == nullptr || queue == VK_NULL_HANDLE ||
-      (impl_->overlay_may_present != nullptr &&
-       !impl_->overlay_may_present())) {
+  if (impl_ == nullptr || queue == VK_NULL_HANDLE) {
     return fallback(queue, submit_count, submits, fence);
   }
   std::mutex* shared_queue_mutex = nullptr;
@@ -836,9 +834,7 @@ VkResult VulkanTextOverlayCompositor::QueueSubmit2(
   if (fallback == nullptr) {
     return VK_ERROR_INITIALIZATION_FAILED;
   }
-  if (impl_ == nullptr || queue == VK_NULL_HANDLE ||
-      (impl_->overlay_may_present != nullptr &&
-       !impl_->overlay_may_present())) {
+  if (impl_ == nullptr || queue == VK_NULL_HANDLE) {
     return fallback(queue, submit_count, submits, fence);
   }
   std::mutex* shared_queue_mutex = nullptr;
@@ -862,9 +858,7 @@ VkResult VulkanTextOverlayCompositor::QueueBindSparse(
   if (fallback == nullptr) {
     return VK_ERROR_INITIALIZATION_FAILED;
   }
-  if (impl_ == nullptr || queue == VK_NULL_HANDLE ||
-      (impl_->overlay_may_present != nullptr &&
-       !impl_->overlay_may_present())) {
+  if (impl_ == nullptr || queue == VK_NULL_HANDLE) {
     return fallback(queue, bind_info_count, bind_info, fence);
   }
   std::mutex* shared_queue_mutex = nullptr;
@@ -886,9 +880,7 @@ VkResult VulkanTextOverlayCompositor::QueueWaitIdle(
   if (fallback == nullptr) {
     return VK_ERROR_INITIALIZATION_FAILED;
   }
-  if (impl_ == nullptr || queue == VK_NULL_HANDLE ||
-      (impl_->overlay_may_present != nullptr &&
-       !impl_->overlay_may_present())) {
+  if (impl_ == nullptr || queue == VK_NULL_HANDLE) {
     return fallback(queue);
   }
   std::mutex* shared_queue_mutex = nullptr;
@@ -910,9 +902,7 @@ VkResult VulkanTextOverlayCompositor::DeviceWaitIdle(
   if (fallback == nullptr) {
     return VK_ERROR_INITIALIZATION_FAILED;
   }
-  if (impl_ == nullptr || device == VK_NULL_HANDLE ||
-      (impl_->overlay_may_present != nullptr &&
-       !impl_->overlay_may_present())) {
+  if (impl_ == nullptr || device == VK_NULL_HANDLE) {
     return fallback(device);
   }
   std::mutex* shared_queue_mutex = nullptr;
@@ -939,8 +929,22 @@ VkResult VulkanTextOverlayCompositor::QueuePresent(
   if (impl_ == nullptr || queue == VK_NULL_HANDLE || present_info == nullptr) {
     return fallback(queue, present_info);
   }
+  // No compositor work has consumed the application's wait semaphores yet,
+  // so an inactive overlay forwards the original present. It still takes the
+  // imported queue lock because libplacebo and the application share VkQueue.
   if (impl_->overlay_may_present != nullptr &&
       !impl_->overlay_may_present()) {
+    std::mutex* shared_queue_mutex = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(impl_->mutex);
+      Impl::QueueState* queue_state = nullptr;
+      Impl::DeviceState* device = impl_->FindQueue(queue, &queue_state);
+      shared_queue_mutex = impl_->SharedQueueMutex(device, queue_state);
+    }
+    if (shared_queue_mutex == nullptr) {
+      return fallback(queue, present_info);
+    }
+    std::lock_guard<std::mutex> queue_lock(*shared_queue_mutex);
     return fallback(queue, present_info);
   }
 

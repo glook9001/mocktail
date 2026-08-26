@@ -10,7 +10,6 @@
 #include <fcntl.h>
 #include <iostream>
 #include <limits.h>
-#include <sys/mman.h>
 #include <unordered_map>
 #include <unistd.h>
 
@@ -503,18 +502,4 @@ extern "C" ssize_t mocktail___readlink_chk(const char* path, char* buf,
     std::abort();
   }
   return mocktail_readlink(path, buf, len);
-}
-
-extern "C" int mocktail_madvise(void* addr, size_t length, int advice) {
-  // Remap Android MADV_FREE (8) to Linux MADV_DONTNEED (4) to prevent failed EINVAL retries
-  if (advice == 8) {
-    advice = 4;
-  }
-#if defined(MADV_HUGEPAGE)
-  // Optimize large anonymous allocator segments (>= 2MB)
-  if (length >= 2 * 1024 * 1024 && advice == MADV_WILLNEED) {
-    (void)::madvise(addr, length, MADV_HUGEPAGE);
-  }
-#endif
-  return ::madvise(addr, length, advice);
 }

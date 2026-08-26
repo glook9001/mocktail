@@ -17,14 +17,8 @@ function(configure_stub TARGET SONAME)
   target_compile_options(${TARGET} PRIVATE -Wno-unused-parameter)
 endfunction()
 
-# Single-cycle hardware math builtins for libm.so
-add_library(stub_sys_m SHARED libm_stub.cc)
-configure_stub(stub_sys_m "libm.so")
-target_compile_options(stub_sys_m PRIVATE -O3 -fno-math-errno)
-target_link_options(stub_sys_m PRIVATE "LINKER:--no-as-needed")
-target_link_libraries(stub_sys_m PRIVATE -lm)
-
 foreach(_pair
+  "libm.so|m"
   "libz.so|z"
   "libdl.so|dl"
 )
@@ -52,7 +46,11 @@ configure_stub(stub_android "libandroid.so")
 target_include_directories(stub_android PUBLIC ${CMAKE_SOURCE_DIR}/include)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MINIZIP REQUIRED IMPORTED_TARGET minizip)
-target_link_libraries(stub_android PRIVATE PkgConfig::MINIZIP)
+target_link_libraries(stub_android PRIVATE
+  PkgConfig::MINIZIP
+  Threads::Threads
+  ${CMAKE_DL_LIBS}
+)
 
 include(CheckCXXSourceCompiles)
 include(CMakePushCheckState)

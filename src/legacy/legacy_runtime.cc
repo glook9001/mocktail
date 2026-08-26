@@ -2,14 +2,12 @@
 #include <atomic>
 #include <cctype>
 #include <cerrno>
-#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <link.h>
-#include <malloc.h>
 #include <iomanip>
 #include <iostream>
 #include <csignal>
@@ -3114,18 +3112,10 @@ bool RunTaskSchedulerForegroundOnMainThread(
 }
 
 void PumpRobloxMainThreadMessagesOnce() {
-  static const bool force_early =
-      IsEnabled("MOCKTAIL_FORCE_EARLY_MAIN_THREAD_MESSAGE_PUMP");
-  static const bool trace_pump =
-      IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP");
-  static const bool is_disabled =
-      IsDisabled("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP");
-  static const int pump_limit =
-      GetEnvInt("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP_LIMIT", 0);
-
-  if (g_main_thread_message_pump_ready.load() == 0 && !force_early) {
+  if (g_main_thread_message_pump_ready.load() == 0 &&
+      !IsEnabled("MOCKTAIL_FORCE_EARLY_MAIN_THREAD_MESSAGE_PUMP")) {
     static bool logged_not_ready = false;
-    if (!logged_not_ready && trace_pump) {
+    if (!logged_not_ready && IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
       logged_not_ready = true;
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump not ready\n"
                 << std::flush;
@@ -3135,9 +3125,10 @@ void PumpRobloxMainThreadMessagesOnce() {
 
   if (g_native_call_messages_from_main_thread == nullptr ||
       g_vm_for_main_thread_pump == nullptr ||
-      g_native_gl_class_for_main_thread == nullptr || is_disabled) {
+      g_native_gl_class_for_main_thread == nullptr ||
+      IsDisabled("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP")) {
     static bool logged_unavailable = false;
-    if (!logged_unavailable && trace_pump) {
+    if (!logged_unavailable && IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
       logged_unavailable = true;
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump unavailable"
                 << " fn="
@@ -3147,7 +3138,9 @@ void PumpRobloxMainThreadMessagesOnce() {
                 << " class="
                 << reinterpret_cast<const void*>(
                        g_native_gl_class_for_main_thread)
-                << " disabled=" << is_disabled << '\n'
+                << " disabled="
+                << IsDisabled("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP")
+                << '\n'
                 << std::flush;
     }
     return;
@@ -3156,7 +3149,7 @@ void PumpRobloxMainThreadMessagesOnce() {
   JNIEnv* env = AttachMainThreadJniEnv();
   if (env == nullptr) {
     static bool logged_missing_env = false;
-    if (!logged_missing_env && trace_pump) {
+    if (!logged_missing_env && IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
       logged_missing_env = true;
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump has no JNIEnv\n"
                 << std::flush;
@@ -3165,10 +3158,11 @@ void PumpRobloxMainThreadMessagesOnce() {
   }
   static int pump_count = 0;
   ++pump_count;
+  int pump_limit = GetEnvInt("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP_LIMIT", 0);
   if (pump_limit > 0 && pump_count > pump_limit) {
     return;
   }
-  if (trace_pump) {
+  if (IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
     if (pump_count <= 10 || pump_count % 100 == 0) {
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump #"
                 << pump_count << " env=" << static_cast<void*>(env) << '\n'
@@ -3193,17 +3187,6 @@ void PumpRobloxMainThreadMessagesOnce() {
     std::cerr << "  [main] nativeCallMessagesFromMainThread recovered\n"
               << std::flush;
   }
-#if defined(__GLIBC__)
-  static auto last_trim_time = std::chrono::steady_clock::now();
-  if (pump_count % 600 == 0) {
-    const auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_trim_time)
-            .count() >= 15) {
-      last_trim_time = now;
-      malloc_trim(0);
-    }
-  }
-#endif
 }
 
 void PumpStartupOwnerThread(void* /*context*/) {
@@ -3388,7 +3371,6 @@ void RegisterBionicPathWrappers() {
   linker::RegisterSymbol("readlink", reinterpret_cast<void*>(mocktail_readlink));
   linker::RegisterSymbol("__readlink_chk",
                          reinterpret_cast<void*>(mocktail___readlink_chk));
-  linker::RegisterSymbol("madvise", reinterpret_cast<void*>(mocktail_madvise));
 }
 
 mocktail::runtime::RuntimePaths CurrentRuntimePaths() {
@@ -5520,11 +5502,6 @@ uintptr_t SeedStage6StringFieldValueScratch(uintptr_t source_string) {
   }
 
   std::string value(chars, length);
-  auto* old_words =
-      reinterpret_cast<uintptr_t*>(g_stage6_string_field_value_scratch);
-  if ((old_words[0] & 1u) != 0 && old_words[2] != 0) {
-    std::free(reinterpret_cast<void*>(old_words[2]));
-  }
   std::memset(g_stage6_string_field_value_scratch, 0,
               sizeof(g_stage6_string_field_value_scratch));
   WriteLibcxxString(g_stage6_string_field_value_scratch, value);

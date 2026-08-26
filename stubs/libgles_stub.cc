@@ -45,11 +45,8 @@ thread_local GLenum g_last_error = kGlNoError;
 thread_local GLint g_viewport[4] = {0, 0, 1280, 720};
 
 bool TestGraphicsStubsEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("MOCKTAIL_ENABLE_TEST_GRAPHICS_STUBS");
-    return value != nullptr && std::strcmp(value, "1") == 0;
-  }();
-  return enabled;
+  const char* value = std::getenv("MOCKTAIL_ENABLE_TEST_GRAPHICS_STUBS");
+  return value != nullptr && std::strcmp(value, "1") == 0;
 }
 
 bool RequireTestGraphicsStub() {

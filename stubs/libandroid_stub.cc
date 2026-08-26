@@ -17,20 +17,22 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <limits>
 #include <mutex>
+#include <new>
 #include <string>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 // Read-only asset access
@@ -116,10 +118,20 @@ bool FileExists(const std::string& path) {
 struct AssetLookupCache {
   std::mutex mutex;
   std::unordered_map<std::string, std::string> resolved_paths;
-  std::unordered_set<std::string> missing_paths;
 };
 
 AssetLookupCache g_asset_lookup_cache;
+constexpr std::size_t kMaxCachedAssetPaths = 1024 * 5;
+
+std::string AssetCacheKey(const std::string& root,
+                          const std::string& requested) {
+  std::string key;
+  key.reserve(root.size() + 1 + requested.size());
+  key.append(root);
+  key.push_back('\0');
+  key.append(requested);
+  return key;
+}
 
 std::string ResolveAssetPath(const char* filename) {
   if (filename == nullptr) {
@@ -130,19 +142,21 @@ std::string ResolveAssetPath(const char* filename) {
     return {};
   }
 
+  const char* root_env = GetEnvNonEmpty("MOCKTAIL_ASSET_ROOT");
+  std::string root = root_env != nullptr ? root_env : "rbx_bin/assets";
+  const std::string cache_key = AssetCacheKey(root, requested);
+
   {
     std::scoped_lock lock(g_asset_lookup_cache.mutex);
-    if (g_asset_lookup_cache.missing_paths.count(requested) != 0) {
-      return {};
-    }
-    auto it = g_asset_lookup_cache.resolved_paths.find(requested);
+    auto it = g_asset_lookup_cache.resolved_paths.find(cache_key);
     if (it != g_asset_lookup_cache.resolved_paths.end()) {
-      return it->second;
+      if (FileExists(it->second)) {
+        return it->second;
+      }
+      g_asset_lookup_cache.resolved_paths.erase(it);
     }
   }
 
-  const char* root_env = GetEnvNonEmpty("MOCKTAIL_ASSET_ROOT");
-  std::string root = root_env != nullptr ? root_env : "rbx_bin/assets";
   std::string stripped = StripAndroidAssetPrefix(requested);
 
   const std::vector<std::string> candidates = {
@@ -154,15 +168,19 @@ std::string ResolveAssetPath(const char* filename) {
   for (const std::string& candidate : candidates) {
     if (FileExists(candidate)) {
       std::scoped_lock lock(g_asset_lookup_cache.mutex);
-      g_asset_lookup_cache.resolved_paths.emplace(requested, candidate);
+      if (g_asset_lookup_cache.resolved_paths.size() >=
+              kMaxCachedAssetPaths &&
+          g_asset_lookup_cache.resolved_paths.find(cache_key) ==
+              g_asset_lookup_cache.resolved_paths.end()) {
+        g_asset_lookup_cache.resolved_paths.erase(
+            g_asset_lookup_cache.resolved_paths.begin());
+      }
+      g_asset_lookup_cache.resolved_paths.insert_or_assign(cache_key,
+                                                           candidate);
       return candidate;
     }
   }
 
-  {
-    std::scoped_lock lock(g_asset_lookup_cache.mutex);
-    g_asset_lookup_cache.missing_paths.insert(requested);
-  }
   return {};
 }
 
@@ -525,7 +543,8 @@ constexpr int kPollWake = -1;
 constexpr int kPollCallback = -2;
 constexpr int kPollTimeout = -3;
 constexpr int kPollError = -4;
-constexpr std::size_t kMaxRegistrations = 32;
+constexpr int kPrepareAllowNonCallbacks = 1 << 0;
+constexpr uint64_t kWakeToken = 0;
 
 using LooperCallback = int (*)(int, int, void*);
 
@@ -535,11 +554,20 @@ struct LooperRegistration {
   int events = 0;
   LooperCallback callback = nullptr;
   void* data = nullptr;
+  uint64_t token = 0;
+};
+
+struct LooperResponse {
+  LooperRegistration registration;
+  int events = 0;
 };
 
 struct ALooper {
-  ALooper()
-      : epoll_fd(::epoll_create1(EPOLL_CLOEXEC)),
+  explicit ALooper(int requested_opts)
+      : opts(requested_opts),
+        allow_non_callbacks(
+            (requested_opts & kPrepareAllowNonCallbacks) != 0),
+        epoll_fd(::epoll_create1(EPOLL_CLOEXEC)),
         wake_fd(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) {
     if (epoll_fd < 0 || wake_fd < 0) {
       if (epoll_fd >= 0) ::close(epoll_fd);
@@ -550,7 +578,7 @@ struct ALooper {
     }
     epoll_event event{};
     event.events = EPOLLIN;
-    event.data.fd = wake_fd;
+    event.data.u64 = kWakeToken;
     if (::epoll_ctl(epoll_fd, EPOLL_CTL_ADD, wake_fd, &event) != 0) {
       ::close(epoll_fd);
       ::close(wake_fd);
@@ -567,16 +595,41 @@ struct ALooper {
   ALooper(const ALooper&) = delete;
   ALooper& operator=(const ALooper&) = delete;
 
+  bool valid() const { return epoll_fd >= 0 && wake_fd >= 0; }
+
+  const int opts;
+  const bool allow_non_callbacks;
   int epoll_fd = -1;
   int wake_fd = -1;
-  std::atomic<int> refs{1};
+  std::atomic<uint32_t> refs{1};
   std::atomic<bool> polling{false};
   std::mutex mutex;
-  std::array<LooperRegistration, kMaxRegistrations> registrations{};
-  std::size_t registration_count = 0;
+  std::unordered_map<int, uint64_t> token_by_fd;
+  std::unordered_map<uint64_t, LooperRegistration> registrations_by_token;
+  uint64_t next_token = 1;
+
+  // Only the associated thread accesses pending_responses.  Entries are
+  // generation-checked before being returned so a concurrent remove/re-add
+  // cannot surface an event for a reused descriptor.
+  std::deque<LooperResponse> pending_responses;
 };
 
-thread_local ALooper g_thread_looper;
+void ReleaseLooperReference(ALooper* looper);
+
+struct ThreadLooperState {
+  ~ThreadLooperState() { ReleaseLooperReference(looper); }
+
+  ALooper* looper = nullptr;
+};
+
+thread_local ThreadLooperState g_thread_looper;
+
+void ReleaseLooperReference(ALooper* looper) {
+  if (looper != nullptr &&
+      looper->refs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    delete looper;
+  }
+}
 
 uint32_t EpollEventsFromAndroid(int events) {
   uint32_t result = 0;
@@ -591,28 +644,122 @@ int AndroidEventsFromEpoll(uint32_t events) {
   if ((events & EPOLLOUT) != 0) result |= 1 << 1;
   if ((events & EPOLLERR) != 0) result |= 1 << 2;
   if ((events & EPOLLHUP) != 0) result |= 1 << 3;
-  if ((events & EPOLLPRI) != 0) result |= 1 << 4;
   return result;
 }
 
-LooperRegistration FindLooperRegistration(ALooper* looper, int fd, bool* found) {
-  std::scoped_lock lock(looper->mutex);
-  for (std::size_t i = 0; i < looper->registration_count; ++i) {
-    if (looper->registrations[i].fd == fd) {
-      if (found) *found = true;
-      return looper->registrations[i];
+uint64_t NextRegistrationTokenLocked(ALooper* looper) {
+  for (;;) {
+    const uint64_t token = looper->next_token++;
+    if (looper->next_token == kWakeToken) {
+      looper->next_token = 1;
+    }
+    if (token != kWakeToken &&
+        looper->registrations_by_token.find(token) ==
+            looper->registrations_by_token.end()) {
+      return token;
     }
   }
-  if (found) *found = false;
-  return {};
+}
+
+bool RegistrationIsCurrent(ALooper* looper,
+                           const LooperRegistration& registration) {
+  std::scoped_lock lock(looper->mutex);
+  const auto fd_it = looper->token_by_fd.find(registration.fd);
+  if (fd_it == looper->token_by_fd.end() ||
+      fd_it->second != registration.token) {
+    return false;
+  }
+  return looper->registrations_by_token.find(registration.token) !=
+         looper->registrations_by_token.end();
+}
+
+int RemoveFdLocked(ALooper* looper, int fd, uint64_t expected_token) {
+  const auto fd_it = looper->token_by_fd.find(fd);
+  if (fd_it == looper->token_by_fd.end() ||
+      (expected_token != 0 && fd_it->second != expected_token)) {
+    return 0;
+  }
+
+  const uint64_t token = fd_it->second;
+  const int ctl_result =
+      ::epoll_ctl(looper->epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+  const int ctl_errno = errno;
+
+  // Closing an fd automatically removes it from epoll.  Treat that as a
+  // successful logical removal.  On a real internal failure, preserve the
+  // registration so poll and a later removal still agree with the kernel.
+  if (ctl_result != 0 && ctl_errno != ENOENT && ctl_errno != EBADF) {
+    errno = ctl_errno;
+    return -1;
+  }
+  looper->token_by_fd.erase(fd_it);
+  looper->registrations_by_token.erase(token);
+  return 1;
+}
+
+void ClearPollOutputs(int* out_fd, int* out_events, void** out_data) {
+  if (out_fd != nullptr) *out_fd = 0;
+  if (out_events != nullptr) *out_events = 0;
+  if (out_data != nullptr) *out_data = nullptr;
+}
+
+bool TakePendingIdent(ALooper* looper, int* out_fd, int* out_events,
+                      void** out_data, int* result) {
+  while (!looper->pending_responses.empty()) {
+    const LooperResponse response = looper->pending_responses.front();
+    looper->pending_responses.pop_front();
+    if (!RegistrationIsCurrent(looper, response.registration) ||
+        response.registration.callback != nullptr) {
+      continue;
+    }
+    if (out_fd != nullptr) *out_fd = response.registration.fd;
+    if (out_events != nullptr) *out_events = response.events;
+    if (out_data != nullptr) *out_data = response.registration.data;
+    *result = response.registration.ident;
+    return true;
+  }
+  return false;
+}
+
+int RemainingPollTimeout(
+    int original_timeout,
+    const std::chrono::steady_clock::time_point& deadline) {
+  if (original_timeout < 0) return -1;
+  if (original_timeout == 0) return 0;
+
+  const auto remaining = deadline - std::chrono::steady_clock::now();
+  if (remaining <= std::chrono::steady_clock::duration::zero()) return 0;
+  auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(remaining);
+  if (millis < remaining) {
+    millis += std::chrono::milliseconds(1);
+  }
+  return static_cast<int>(std::min<int64_t>(
+      millis.count(), std::numeric_limits<int>::max()));
 }
 
 }  // namespace
 
 extern "C" {
 
-ALooper* ALooper_forThread() { return &g_thread_looper; }
-ALooper* ALooper_prepare(int) { return ALooper_forThread(); }
+ALooper* ALooper_forThread() { return g_thread_looper.looper; }
+
+ALooper* ALooper_prepare(int opts) {
+  if (g_thread_looper.looper != nullptr) {
+    return g_thread_looper.looper;
+  }
+
+  auto* looper = new (std::nothrow) ALooper(opts);
+  if (looper == nullptr) {
+    errno = ENOMEM;
+    return nullptr;
+  }
+  if (!looper->valid()) {
+    delete looper;
+    return nullptr;
+  }
+  g_thread_looper.looper = looper;
+  return looper;
+}
 
 void ALooper_acquire(ALooper* looper) {
   if (looper != nullptr) {
@@ -621,122 +768,219 @@ void ALooper_acquire(ALooper* looper) {
 }
 
 void ALooper_release(ALooper* looper) {
-  if (looper != nullptr) {
-    looper->refs.fetch_sub(1, std::memory_order_relaxed);
-  }
+  ReleaseLooperReference(looper);
 }
 
 int ALooper_addFd(ALooper* looper, int fd, int ident, int events,
                   int (*callback)(int, int, void*), void* data) {
-  if (looper == nullptr || looper->epoll_fd < 0 || fd < 0 ||
-      (callback == nullptr && ident < 0)) {
+  const bool callback_ident_valid = ident >= 0 || ident == kPollCallback;
+  if (looper == nullptr || !looper->valid() || fd < 0 ||
+      (callback == nullptr &&
+       (!looper->allow_non_callbacks || ident < 0)) ||
+      (callback != nullptr && !callback_ident_valid)) {
     errno = EINVAL;
-    return 0;
+    return -1;
+  }
+
+  std::scoped_lock lock(looper->mutex);
+  auto fd_it = looper->token_by_fd.find(fd);
+  const bool update = fd_it != looper->token_by_fd.end();
+  const uint64_t old_token = update ? fd_it->second : 0;
+  const uint64_t token = NextRegistrationTokenLocked(looper);
+  const LooperRegistration registration = {
+      fd, callback != nullptr ? kPollCallback : ident, events, callback, data,
+      token};
+
+  const auto inserted =
+      looper->registrations_by_token.emplace(token, registration);
+  if (!inserted.second) {
+    errno = EAGAIN;
+    return -1;
+  }
+  if (update) {
+    fd_it->second = token;
+  } else {
+    const auto fd_inserted = looper->token_by_fd.emplace(fd, token);
+    if (!fd_inserted.second) {
+      looper->registrations_by_token.erase(token);
+      errno = EAGAIN;
+      return -1;
+    }
+    fd_it = fd_inserted.first;
   }
 
   epoll_event event{};
   event.events = EpollEventsFromAndroid(events);
-  event.data.fd = fd;
-  std::scoped_lock lock(looper->mutex);
-  std::size_t index = looper->registration_count;
-  for (std::size_t i = 0; i < looper->registration_count; ++i) {
-    if (looper->registrations[i].fd == fd) {
-      index = i;
-      break;
+  event.data.u64 = token;
+  int operation = update ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+  int ctl_result = ::epoll_ctl(looper->epoll_fd, operation, fd, &event);
+  if (ctl_result != 0 && update && errno == ENOENT) {
+    operation = EPOLL_CTL_ADD;
+    ctl_result = ::epoll_ctl(looper->epoll_fd, operation, fd, &event);
+  } else if (ctl_result != 0 && !update && errno == EEXIST) {
+    operation = EPOLL_CTL_MOD;
+    ctl_result = ::epoll_ctl(looper->epoll_fd, operation, fd, &event);
+  }
+
+  if (ctl_result != 0) {
+    const int ctl_errno = errno;
+    looper->registrations_by_token.erase(token);
+    if (update) {
+      fd_it->second = old_token;
+    } else {
+      looper->token_by_fd.erase(fd_it);
     }
+    errno = ctl_errno;
+    return -1;
   }
-  const bool update = index < looper->registration_count;
-  if (!update && looper->registration_count == kMaxRegistrations) {
-    errno = ENOSPC;
-    return 0;
+
+  if (update) {
+    looper->registrations_by_token.erase(old_token);
   }
-  const int operation = update ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-  if (::epoll_ctl(looper->epoll_fd, operation, fd, &event) != 0) return 0;
-  looper->registrations[index] = {fd, ident, events, callback, data};
-  if (!update) ++looper->registration_count;
   return 1;
 }
 
 int ALooper_removeFd(ALooper* looper, int fd) {
-  if (looper == nullptr || looper->epoll_fd < 0) return 0;
-  std::scoped_lock lock(looper->mutex);
-  for (std::size_t i = 0; i < looper->registration_count; ++i) {
-    if (looper->registrations[i].fd != fd) continue;
-    (void)::epoll_ctl(looper->epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
-    looper->registrations[i] =
-        looper->registrations[--looper->registration_count];
-    return 1;
+  if (looper == nullptr || !looper->valid() || fd < 0) {
+    errno = EINVAL;
+    return -1;
   }
-  return 0;
+  std::scoped_lock lock(looper->mutex);
+  return RemoveFdLocked(looper, fd, 0);
 }
 
 void ALooper_wake(ALooper* looper) {
   if (looper == nullptr || looper->wake_fd < 0) return;
   const uint64_t value = 1;
-  (void)::write(looper->wake_fd, &value, sizeof(value));
+  ssize_t written;
+  do {
+    written = ::write(looper->wake_fd, &value, sizeof(value));
+  } while (written < 0 && errno == EINTR);
 }
 
 bool ALooper_isPolling(ALooper* looper) {
   return looper != nullptr &&
-         looper->polling.load(std::memory_order_relaxed);
+         looper->polling.load(std::memory_order_acquire);
 }
 
 int ALooper_pollOnce(int timeout_ms, int* out_fd, int* out_events,
                      void** out_data) {
-  auto* looper = static_cast<ALooper*>(ALooper_forThread());
-  if (looper == nullptr || looper->epoll_fd < 0) return kPollError;
+  ClearPollOutputs(out_fd, out_events, out_data);
+  auto* looper = ALooper_forThread();
+  if (looper == nullptr || !looper->valid()) return kPollError;
 
-  std::array<epoll_event, kMaxRegistrations + 1> events{};
-  looper->polling.store(true, std::memory_order_relaxed);
-  const int ready = ::epoll_wait(looper->epoll_fd, events.data(),
-                                 static_cast<int>(events.size()), timeout_ms);
-  looper->polling.store(false, std::memory_order_relaxed);
-
-  if (ready == 0) return kPollTimeout;
-  if (ready < 0) return errno == EINTR ? kPollTimeout : kPollError;
-
-  bool had_callback = false;
-  bool had_wake = false;
-
-  for (int i = 0; i < ready; ++i) {
-    const int fd = events[static_cast<std::size_t>(i)].data.fd;
-    if (fd == looper->wake_fd) {
-      uint64_t value = 0;
-      (void)::read(looper->wake_fd, &value, sizeof(value));
-      had_wake = true;
-      continue;
-    }
-    bool found = false;
-    const LooperRegistration registration =
-        FindLooperRegistration(looper, fd, &found);
-    if (!found) continue;
-    const int android_events =
-        AndroidEventsFromEpoll(events[static_cast<std::size_t>(i)].events);
-    if (registration.callback != nullptr) {
-      const int keep = registration.callback(registration.fd, android_events,
-                                             registration.data);
-      if (!keep) (void)ALooper_removeFd(looper, registration.fd);
-      had_callback = true;
-    } else {
-      if (out_fd) *out_fd = registration.fd;
-      if (out_events) *out_events = android_events;
-      if (out_data) *out_data = registration.data;
-      return registration.ident;
-    }
+  int pending_result = 0;
+  if (TakePendingIdent(looper, out_fd, out_events, out_data,
+                       &pending_result)) {
+    return pending_result;
   }
 
-  if (had_callback) return kPollCallback;
-  if (had_wake) return kPollWake;
-  return kPollTimeout;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(
+                            timeout_ms > 0 ? timeout_ms : 0);
+  int wait_timeout = timeout_ms;
+
+  for (;;) {
+    std::size_t event_capacity = 1;
+    {
+      std::scoped_lock lock(looper->mutex);
+      event_capacity += looper->registrations_by_token.size();
+    }
+    if (event_capacity >
+        static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+      errno = EOVERFLOW;
+      return kPollError;
+    }
+
+    std::vector<epoll_event> events(event_capacity);
+
+    looper->polling.store(true, std::memory_order_release);
+    const int ready = ::epoll_wait(looper->epoll_fd, events.data(),
+                                   static_cast<int>(events.size()),
+                                   wait_timeout);
+    const int wait_errno = errno;
+    looper->polling.store(false, std::memory_order_release);
+
+    if (ready == 0) return kPollTimeout;
+    if (ready < 0) {
+      if (wait_errno != EINTR) {
+        errno = wait_errno;
+        return kPollError;
+      }
+      wait_timeout = RemainingPollTimeout(timeout_ms, deadline);
+      continue;
+    }
+
+    bool had_wake = false;
+    std::vector<LooperResponse> responses;
+    responses.reserve(static_cast<std::size_t>(ready));
+
+    for (int i = 0; i < ready; ++i) {
+      const epoll_event& event = events[static_cast<std::size_t>(i)];
+      const uint64_t token = event.data.u64;
+      if (token == kWakeToken) {
+        uint64_t value = 0;
+        ssize_t read_result;
+        do {
+          read_result = ::read(looper->wake_fd, &value, sizeof(value));
+        } while (read_result < 0 && errno == EINTR);
+        had_wake = true;
+        continue;
+      }
+
+      std::scoped_lock lock(looper->mutex);
+      const auto registration_it =
+          looper->registrations_by_token.find(token);
+      if (registration_it == looper->registrations_by_token.end()) {
+        continue;
+      }
+      responses.push_back({registration_it->second,
+                           AndroidEventsFromEpoll(event.events)});
+    }
+
+    bool invoked_callback = false;
+    for (const LooperResponse& response : responses) {
+      if (response.registration.callback == nullptr) continue;
+      const int keep = response.registration.callback(
+          response.registration.fd, response.events,
+          response.registration.data);
+      invoked_callback = true;
+      if (keep == 0) {
+        std::scoped_lock lock(looper->mutex);
+        (void)RemoveFdLocked(looper, response.registration.fd,
+                             response.registration.token);
+      }
+    }
+
+    for (const LooperResponse& response : responses) {
+      if (response.registration.callback == nullptr) {
+        looper->pending_responses.push_back(response);
+      }
+    }
+
+    if (TakePendingIdent(looper, out_fd, out_events, out_data,
+                         &pending_result)) {
+      return pending_result;
+    }
+
+    if (invoked_callback) return kPollCallback;
+    if (had_wake) return kPollWake;
+
+    // Every event in the batch belonged to a removed or replaced
+    // registration.  Keep waiting without extending the caller's timeout.
+    wait_timeout = RemainingPollTimeout(timeout_ms, deadline);
+  }
 }
 
 int ALooper_pollAll(int timeout_ms, int* out_fd, int* out_events,
                     void** out_data) {
-  int result = ALooper_pollOnce(timeout_ms, out_fd, out_events, out_data);
-  while (result == kPollCallback || result == kPollWake) {
-    result = ALooper_pollOnce(0, out_fd, out_events, out_data);
+  int current_timeout = timeout_ms;
+  for (;;) {
+    const int result =
+        ALooper_pollOnce(current_timeout, out_fd, out_events, out_data);
+    if (result != kPollCallback) return result;
+    current_timeout = 0;
   }
-  return result;
 }
 
 // ANativeWindow — surface / window handle

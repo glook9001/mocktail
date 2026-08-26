@@ -781,6 +781,15 @@ target_link_libraries(asset_manager_test PRIVATE
   GTest::gtest_main
 )
 
+add_executable(android_looper_test
+  android_looper_test.cc
+)
+target_link_libraries(android_looper_test PRIVATE
+  stub_android
+  GTest::gtest_main
+  Threads::Threads
+)
+
 add_executable(android_native_window_test
   android_native_window_test.cc
 )
@@ -889,6 +898,7 @@ endif()
 gtest_discover_tests(libc_shim_test)
 gtest_discover_tests(discord_rpc_test)
 gtest_discover_tests(asset_manager_test)
+gtest_discover_tests(android_looper_test)
 gtest_discover_tests(android_native_window_test)
 gtest_discover_tests(headless_graphics_test)
 

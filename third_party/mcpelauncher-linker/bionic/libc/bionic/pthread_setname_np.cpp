@@ -82,74 +82,6 @@ int pthread_getname_np(pthread_t t, char* buf, size_t buf_size) {
   return 0;
 }
 
-#include <sched.h>
-#include <stdlib.h>
-#include <vector>
-
-namespace {
-
-struct CoreAffinityPolicy {
-  cpu_set_t render_core;
-  cpu_set_t worker_core;
-  bool active = false;
-};
-
-const CoreAffinityPolicy& GetCoreAffinityPolicy() {
-  static const CoreAffinityPolicy policy = [] {
-    CoreAffinityPolicy p{};
-    CPU_ZERO(&p.render_core);
-    CPU_ZERO(&p.worker_core);
-    const char* env_disabled = getenv("MOCKTAIL_AFFINITY_POLICY");
-    if (env_disabled != nullptr && (strcmp(env_disabled, "0") == 0 ||
-                                   strcmp(env_disabled, "off") == 0)) {
-      return p;
-    }
-    std::vector<int> core0;
-    std::vector<int> core1;
-    for (int cpu = 0; cpu < 64; ++cpu) {
-      char path[64];
-      snprintf(path, sizeof(path),
-               "/sys/devices/system/cpu/cpu%d/topology/core_id", cpu);
-      FILE* f = fopen(path, "r");
-      if (!f) break;
-      int cid = -1;
-      if (fscanf(f, "%d", &cid) == 1) {
-        if (cid == 0) core0.push_back(cpu);
-        else if (cid >= 1) core1.push_back(cpu);
-      }
-      fclose(f);
-    }
-    if (!core0.empty() && !core1.empty()) {
-      for (int c : core0) CPU_SET(c, &p.render_core);
-      for (int c : core1) CPU_SET(c, &p.worker_core);
-      p.active = true;
-    }
-    return p;
-  }();
-  return policy;
-}
-
-void ApplyThreadAffinity(pthread_t t, const char* name) {
-  if (name == nullptr || name[0] == '\0') return;
-  const auto& policy = GetCoreAffinityPolicy();
-  if (!policy.active) return;
-
-  const int tid = (t == pthread_self()) ? 0 : __pthread_internal_gettid(t, "pthread_setname_np");
-  if (tid < 0) return;
-
-  if (strstr(name, "Render") != nullptr || strstr(name, "Vulkan") != nullptr ||
-      strstr(name, "Present") != nullptr || strstr(name, "Graphics") != nullptr ||
-      strstr(name, "Main") != nullptr || strstr(name, "Display") != nullptr) {
-    (void)sched_setaffinity(tid, sizeof(cpu_set_t), &policy.render_core);
-  } else if (strstr(name, "Worker") != nullptr || strstr(name, "Job") != nullptr ||
-             strstr(name, "Http") != nullptr || strstr(name, "Asset") != nullptr ||
-             strstr(name, "Audio") != nullptr || strstr(name, "Physics") != nullptr) {
-    (void)sched_setaffinity(tid, sizeof(cpu_set_t), &policy.worker_core);
-  }
-}
-
-}  // namespace
-
 __BIONIC_WEAK_FOR_NATIVE_BRIDGE
 int pthread_setname_np(pthread_t t, const char* thread_name) {
   ErrnoRestorer errno_restorer;
@@ -157,24 +89,19 @@ int pthread_setname_np(pthread_t t, const char* thread_name) {
   size_t thread_name_len = strlen(thread_name);
   if (thread_name_len >= MAX_TASK_COMM_LEN) return ERANGE;
 
-  int result = 0;
   // Setting our own name is an easy special case.
   if (t == pthread_self()) {
-    result = prctl(PR_SET_NAME, thread_name) ? errno : 0;
-  } else {
-    // We have to set another thread's name.
-    int fd = __open_task_comm_fd(t, O_WRONLY, "pthread_setname_np");
-    if (fd == -1) return errno;
-
-    ssize_t n = TEMP_FAILURE_RETRY(write(fd, thread_name, thread_name_len));
-    close(fd);
-
-    if (n == -1) return errno;
-    if (n != static_cast<ssize_t>(thread_name_len)) return EIO;
+    return prctl(PR_SET_NAME, thread_name) ? errno : 0;
   }
 
-  if (result == 0) {
-    ApplyThreadAffinity(t, thread_name);
-  }
-  return result;
+  // We have to set another thread's name.
+  int fd = __open_task_comm_fd(t, O_WRONLY, "pthread_setname_np");
+  if (fd == -1) return errno;
+
+  ssize_t n = TEMP_FAILURE_RETRY(write(fd, thread_name, thread_name_len));
+  close(fd);
+
+  if (n == -1) return errno;
+  if (n != static_cast<ssize_t>(thread_name_len)) return EIO;
+  return 0;
 }

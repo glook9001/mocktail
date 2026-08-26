@@ -60,6 +60,10 @@ jobs:
                 python-urllib3 python-certifi python-charset-normalizer \
                 python-idna dbus
 
+              export JAVA_HOME=/usr/lib/jvm/default
+              export PATH="${JAVA_HOME}/bin:${PATH}"
+              test -x "${JAVA_HOME}/bin/jlink"
+
               curl --fail --location --retry 3 \
                 --output /tmp/quick-sharun \
                 https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/2a025cef14483c5bc2a75b479071f4d5c58a906f/useful-tools/quick-sharun.sh

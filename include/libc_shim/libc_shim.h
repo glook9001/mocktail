@@ -78,7 +78,6 @@ char* mocktail_realpath(const char* path, char* resolved_path);
 ssize_t mocktail_readlink(const char* path, char* buf, size_t bufsiz);
 ssize_t mocktail___readlink_chk(const char* path, char* buf, size_t len,
                                 size_t buf_len);
-int mocktail_madvise(void* addr, size_t length, int advice);
 }
 
 #endif  // MOCKTAIL_LIBC_SHIM_LIBC_SHIM_H_

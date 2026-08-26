@@ -221,8 +221,9 @@ std::vector<jchar> ModifiedUtf8ToUtf16(const char* input) {
 struct PseudoStringObject : PseudoJavaObject {
   PseudoStringObject(std::shared_ptr<Class> cls, const char* utf)
       : PseudoJavaObject(std::move(cls)),
-        value(utf != nullptr ? utf : ""),
-        modified_utf8(utf != nullptr ? utf : "") {}
+        chars(ModifiedUtf8ToUtf16(utf)),
+        value(Utf16ToUtf8(chars)),
+        modified_utf8(Utf16ToModifiedUtf8(chars)) {}
 
   PseudoStringObject(std::shared_ptr<Class> cls, const jchar* utf16,
                      jsize length)
@@ -234,13 +235,7 @@ struct PseudoStringObject : PseudoJavaObject {
     modified_utf8 = Utf16ToModifiedUtf8(chars);
   }
 
-  void EnsureUtf16() const {
-    if (chars.empty() && !value.empty()) {
-      chars = ModifiedUtf8ToUtf16(value.c_str());
-    }
-  }
-
-  mutable std::vector<jchar> chars;
+  std::vector<jchar> chars;
   std::string value;
   std::string modified_utf8;
 };
@@ -254,6 +249,7 @@ std::unordered_set<jobject> g_known_objects;
 std::unordered_set<jclass> g_known_classes;
 std::unordered_map<std::string, jobject> g_singleton_objects;
 std::unordered_map<std::string, std::shared_ptr<Class>> g_fallback_classes;
+std::list<std::string> g_string_storage;
 std::unordered_set<jstring> g_known_strings;
 std::list<std::string> g_method_name_storage;
 std::list<std::string> g_method_signature_storage;
@@ -299,19 +295,8 @@ std::shared_ptr<Class> FallbackClassForName(const std::string& class_name) {
   return cls;
 }
 
-std::shared_ptr<Class> JavaStringClass() {
-  static const auto string_class = FallbackClassForName("java/lang/String");
-  return string_class;
-}
-
-std::shared_ptr<Class> JavaObjectClass() {
-  static const auto object_class = FallbackClassForName("java/lang/Object");
-  return object_class;
-}
-
 bool TraceEnabled() {
-  static const bool enabled = std::getenv("MOCKTAIL_JNI_TRACE") != nullptr;
-  return enabled;
+  return std::getenv("MOCKTAIL_JNI_TRACE") != nullptr;
 }
 
 bool EnvironmentTraceEnabled(const char* name) {
@@ -320,11 +305,9 @@ bool EnvironmentTraceEnabled(const char* name) {
 }
 
 bool StringTraceEnabled() {
-  static const bool enabled =
-      EnvironmentTraceEnabled("MOCKTAIL_JNI_STRING_TRACE") ||
-      EnvironmentTraceEnabled("MOCKTAIL_TRACE_ALL") ||
-      EnvironmentTraceEnabled("MOCKTAIL_FULL_TRACE");
-  return enabled;
+  return EnvironmentTraceEnabled("MOCKTAIL_JNI_STRING_TRACE") ||
+         EnvironmentTraceEnabled("MOCKTAIL_TRACE_ALL") ||
+         EnvironmentTraceEnabled("MOCKTAIL_FULL_TRACE");
 }
 
 void Trace(const char* name) {
@@ -611,7 +594,7 @@ jobject MakeObjectForClass(const std::string& class_name) {
 jobject MakeObject(jclass clazz) {
   auto cls = ClassFromJClass(clazz);
   if (!cls) {
-    cls = JavaObjectClass();
+    cls = FallbackClassForName("java/lang/Object");
   }
   return StoreObject(std::make_unique<PseudoJavaObject>(std::move(cls)));
 }
@@ -704,7 +687,7 @@ void SetBooleanFieldRaw(jobject obj, const char* field_name, jboolean value) {
 
 jstring MakeString(const char* utf) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
-  auto cls = JavaStringClass();
+  auto cls = FallbackClassForName("java/lang/String");
   auto object = std::make_unique<PseudoStringObject>(std::move(cls), utf);
   jobject handle = StoreObject(std::move(object));
   jstring str = reinterpret_cast<jstring>(handle);
@@ -714,7 +697,7 @@ jstring MakeString(const char* utf) {
 
 jstring MakeUtf16String(const jchar* utf16, jsize length) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
-  auto cls = JavaStringClass();
+  auto cls = FallbackClassForName("java/lang/String");
   auto object =
       std::make_unique<PseudoStringObject>(std::move(cls), utf16, length);
   jobject handle = StoreObject(std::move(object));
@@ -883,12 +866,7 @@ jbyteArray JavaStringGetUtf8Bytes(jobject obj, jstring charset_name) {
     if (string_object == nullptr) {
       return nullptr;
     }
-    if (!string_object->value.empty()) {
-      bytes = string_object->value;
-    } else {
-      string_object->EnsureUtf16();
-      bytes = JavaStringUtf8Bytes(string_object->chars);
-    }
+    bytes = JavaStringUtf8Bytes(string_object->chars);
   }
   if (bytes.size() >
       static_cast<std::size_t>(std::numeric_limits<jsize>::max())) {
@@ -898,7 +876,10 @@ jbyteArray JavaStringGetUtf8Bytes(jobject obj, jstring charset_name) {
   jbyteArray result =
       MakeByteArray(static_cast<jsize>(bytes.size()));
   PseudoArray* array = ArrayFromRef(result);
-  if (array && !bytes.empty()) {
+  if (array == nullptr || array->bytes.size() != bytes.size()) {
+    return nullptr;
+  }
+  if (!bytes.empty()) {
     std::memcpy(array->bytes.data(), bytes.data(), bytes.size());
   }
   return result;
@@ -925,12 +906,9 @@ const jchar* StringUtf16Chars(jstring str) {
   if (g_known_strings.find(str) != g_known_strings.end()) {
     auto* string_object = dynamic_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-    if (string_object) {
-      string_object->EnsureUtf16();
-      return !string_object->chars.empty() ? string_object->chars.data()
-                                           : kEmptyUtf16;
-    }
-    return kEmptyUtf16;
+    return string_object && !string_object->chars.empty()
+               ? string_object->chars.data()
+               : kEmptyUtf16;
   }
   return reinterpret_cast<const jchar*>(str);
 }
@@ -940,11 +918,9 @@ jsize StringUtf16Length(jstring str) {
   if (g_known_strings.find(str) != g_known_strings.end()) {
     auto* string_object = dynamic_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-    if (string_object != nullptr) {
-      string_object->EnsureUtf16();
-      return static_cast<jsize>(string_object->chars.size());
-    }
-    return 0;
+    return string_object != nullptr
+               ? static_cast<jsize>(string_object->chars.size())
+               : 0;
   }
   const char* bytes = reinterpret_cast<const char*>(str);
   return bytes != nullptr ? static_cast<jsize>(std::strlen(bytes)) : 0;
@@ -970,11 +946,8 @@ void CopyStringRegion(jstring str, jsize start, jsize length, jchar* output) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   auto* string_object = dynamic_cast<PseudoStringObject*>(
       PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-  if (string_object == nullptr) {
-    return;
-  }
-  string_object->EnsureUtf16();
-  if (static_cast<std::size_t>(start) >= string_object->chars.size()) {
+  if (string_object == nullptr ||
+      static_cast<std::size_t>(start) >= string_object->chars.size()) {
     return;
   }
   const std::size_t count = std::min(
@@ -991,11 +964,8 @@ void CopyStringModifiedUtf8Region(jstring str, jsize start, jsize length,
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   auto* string_object = dynamic_cast<PseudoStringObject*>(
       PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-  if (string_object == nullptr) {
-    return;
-  }
-  string_object->EnsureUtf16();
-  if (static_cast<std::size_t>(start) >= string_object->chars.size()) {
+  if (string_object == nullptr ||
+      static_cast<std::size_t>(start) >= string_object->chars.size()) {
     return;
   }
   const std::size_t count = std::min(
@@ -6037,8 +6007,8 @@ void VM::InitJNIFunctionTables() {
 
   native_interface_.GetStaticMethodID =
       [](JNIEnv* /*env*/, jclass clazz, const char* name, const char* sig) -> jmethodID {
-    if (__builtin_expect(TraceEnabled(), 0)) {
-      auto cls = ClassFromJClass(clazz);
+    auto cls = ClassFromJClass(clazz);
+    if (TraceEnabled()) {
       std::cout << "  [JNI] GetStaticMethodID for class "
                 << (cls ? cls->GetName() : "unknown") << ": "
                 << (name ? name : "null") << " " << (sig ? sig : "null")
@@ -6049,8 +6019,8 @@ void VM::InitJNIFunctionTables() {
 
   native_interface_.GetMethodID =
       [](JNIEnv* /*env*/, jclass clazz, const char* name, const char* sig) -> jmethodID {
-    if (__builtin_expect(TraceEnabled(), 0)) {
-      auto cls = ClassFromJClass(clazz);
+    auto cls = ClassFromJClass(clazz);
+    if (TraceEnabled()) {
       std::cout << "  [JNI] GetMethodID for class "
                 << (cls ? cls->GetName() : "unknown") << ": "
                 << (name ? name : "null") << " " << (sig ? sig : "null")
@@ -6061,8 +6031,8 @@ void VM::InitJNIFunctionTables() {
 
   native_interface_.GetStaticFieldID =
       [](JNIEnv* /*env*/, jclass clazz, const char* name, const char* sig) -> jfieldID {
-    if (__builtin_expect(TraceEnabled(), 0)) {
-      auto cls = ClassFromJClass(clazz);
+    auto cls = ClassFromJClass(clazz);
+    if (TraceEnabled()) {
       std::cout << "  [JNI] GetStaticFieldID for class "
                 << (cls ? cls->GetName() : "unknown") << ": "
                 << (name ? name : "null") << " " << (sig ? sig : "null")
@@ -6073,8 +6043,8 @@ void VM::InitJNIFunctionTables() {
 
   native_interface_.GetFieldID =
       [](JNIEnv* /*env*/, jclass clazz, const char* name, const char* sig) -> jfieldID {
-    if (__builtin_expect(TraceEnabled(), 0)) {
-      auto cls = ClassFromJClass(clazz);
+    auto cls = ClassFromJClass(clazz);
+    if (TraceEnabled()) {
       std::cout << "  [JNI] GetFieldID for class "
                 << (cls ? cls->GetName() : "unknown") << ": "
                 << (name ? name : "null") << " " << (sig ? sig : "null")
@@ -6120,12 +6090,12 @@ void VM::InitJNIFunctionTables() {
     if (pseudo_object) {
       return StoreClass(pseudo_object->GetClass());
     }
-    return StoreClass(JavaObjectClass());
+    return StoreClass(FallbackClassForName("java/lang/Object"));
   };
 
   native_interface_.GetSuperclass =
       [](JNIEnv* /*env*/, jclass /*sub*/) -> jclass {
-    return StoreClass(JavaObjectClass());
+    return StoreClass(FallbackClassForName("java/lang/Object"));
   };
 
   native_interface_.IsAssignableFrom =

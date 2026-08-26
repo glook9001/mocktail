@@ -164,19 +164,15 @@ bool TraceFlagEnabled(const char* name) {
 }
 
 bool WindowTraceEnabled() {
-  static const bool enabled =
-      TraceFlagEnabled("MOCKTAIL_WINDOW_TRACE") ||
-      TraceFlagEnabled("MOCKTAIL_TRACE_ALL") ||
-      TraceFlagEnabled("MOCKTAIL_FULL_TRACE");
-  return enabled;
+  return TraceFlagEnabled("MOCKTAIL_WINDOW_TRACE") ||
+         TraceFlagEnabled("MOCKTAIL_TRACE_ALL") ||
+         TraceFlagEnabled("MOCKTAIL_FULL_TRACE");
 }
 
 bool SdlEventTraceEnabled() {
-  static const bool enabled =
-      TraceFlagEnabled("MOCKTAIL_SDL_EVENT_TRACE") ||
-      TraceFlagEnabled("MOCKTAIL_TRACE_ALL") ||
-      TraceFlagEnabled("MOCKTAIL_FULL_TRACE");
-  return enabled;
+  return TraceFlagEnabled("MOCKTAIL_SDL_EVENT_TRACE") ||
+         TraceFlagEnabled("MOCKTAIL_TRACE_ALL") ||
+         TraceFlagEnabled("MOCKTAIL_FULL_TRACE");
 }
 
 const char* GetEnvNonEmpty(const char* name) {
@@ -197,12 +193,10 @@ bool IsDisabledEnv(const char* name) {
 }
 
 bool WindowStatePersistenceSuppressed() {
-  static const bool suppressed =
-      IsEnabledEnv("MOCKTAIL_RESIZE_READINESS") ||
-      IsEnabledEnv("MOCKTAIL_FULLSCREEN_READINESS") ||
-      IsEnabledEnv("MOCKTAIL_INPUT_READINESS") ||
-      IsEnabledEnv("MOCKTAIL_AUTO_EXIT_AFTER_PRESENT_MS");
-  return suppressed;
+  return IsEnabledEnv("MOCKTAIL_RESIZE_READINESS") ||
+         IsEnabledEnv("MOCKTAIL_FULLSCREEN_READINESS") ||
+         IsEnabledEnv("MOCKTAIL_INPUT_READINESS") ||
+         IsEnabledEnv("MOCKTAIL_AUTO_EXIT_AFTER_PRESENT_MS");
 }
 
 bool IsWaylandVideoDriver() {
@@ -1609,9 +1603,8 @@ bool ShouldIgnoreCloseRequest() {
 }
 
 void MaybeQueueInputReadinessSequence() {
-  static const bool input_test_click =
-      StringEquals(GetEnvNonEmpty("MOCKTAIL_INPUT_TEST_CLICK"), "1");
-  if (!input_test_click || g_state.input_test_sequence_queued ||
+  if (g_state.input_test_sequence_queued ||
+      !StringEquals(GetEnvNonEmpty("MOCKTAIL_INPUT_TEST_CLICK"), "1") ||
       !HasPresentedFrame() || !g_platform_event_observer.HasObserver() ||
       g_state.sdl_window == nullptr) {
     return;
@@ -1792,14 +1785,9 @@ bool HandleFullscreenShortcut(const SDL_Event& event) {
 }
 
 void MaybeRequestFullscreenReadiness() {
-  static const auto mode_info = [] {
-    const char* mode = GetEnvNonEmpty("MOCKTAIL_FULLSCREEN_READINESS");
-    const bool single = StringEquals(mode, "1");
-    const bool round = StringEquals(mode, "roundtrip");
-    return std::make_pair(single, round);
-  }();
-  const bool single_transition = mode_info.first;
-  const bool round_trip = mode_info.second;
+  const char* mode = GetEnvNonEmpty("MOCKTAIL_FULLSCREEN_READINESS");
+  const bool single_transition = StringEquals(mode, "1");
+  const bool round_trip = StringEquals(mode, "roundtrip");
   if ((!single_transition && !round_trip) || !HasPresentedFrame()) {
     return;
   }
@@ -2112,24 +2100,20 @@ bool PumpEvents() {
   MaybePersistWindowState();
   MaybeRecoverVulkanSurface();
   MaybeReportVulkanPresentStall();
-  static const long auto_exit_delay_ms = [] {
-    const char* auto_exit_value =
-        GetEnvNonEmpty("MOCKTAIL_AUTO_EXIT_AFTER_PRESENT_MS");
-    if (auto_exit_value == nullptr) return 0L;
+  const char* auto_exit_value =
+      GetEnvNonEmpty("MOCKTAIL_AUTO_EXIT_AFTER_PRESENT_MS");
+  if (!g_state.quit_requested && auto_exit_value != nullptr) {
     char* end = nullptr;
-    const long parsed = std::strtol(auto_exit_value, &end, 10);
-    return (end != auto_exit_value && parsed > 0) ? parsed : 0L;
-  }();
-  if (!g_state.quit_requested && auto_exit_delay_ms > 0) {
+    const long delay_ms = std::strtol(auto_exit_value, &end, 10);
     const uint64_t first_present_ns =
         g_first_present_ticks_ns.load(std::memory_order_acquire);
-    if (first_present_ns != 0) {
+    if (end != auto_exit_value && delay_ms > 0 && first_present_ns != 0) {
       const uint64_t elapsed_ns = SDL_GetTicksNS() - first_present_ns;
-      if (elapsed_ns >= static_cast<uint64_t>(auto_exit_delay_ms) * 1000000ULL) {
+      if (elapsed_ns >= static_cast<uint64_t>(delay_ms) * 1000000ULL) {
         fprintf(stderr,
                 "  [window] automatic exit requested %ld ms after first "
                 "present\n",
-                auto_exit_delay_ms);
+                delay_ms);
         g_state.quit_requested = true;
       }
     }
@@ -2141,16 +2125,10 @@ void PaceInputPump() {
   if (!g_state.initialised) {
     return;
   }
-  static const bool enable_pacing = [] {
-    const char* v = std::getenv("MOCKTAIL_ENABLE_INPUT_PACER");
-    return v != nullptr && v[0] != '0';
-  }();
-  if (enable_pacing) {
-    const uint64_t delay_ns =
-        g_input_pump_pacer.DelayBeforeNextPump(SDL_GetTicksNS());
-    if (delay_ns != 0) {
-      SDL_DelayPrecise(delay_ns);
-    }
+  const uint64_t delay_ns =
+      g_input_pump_pacer.DelayBeforeNextPump(SDL_GetTicksNS());
+  if (delay_ns != 0) {
+    SDL_DelayPrecise(delay_ns);
   }
 }
 

@@ -32,19 +32,16 @@ static const char* PriorityChar(int prio) {
   }
 }
 
-#include <cstdlib>
-#include <cstring>
-
 namespace {
 
 std::atomic<MocktailAndroidLogObserver> g_log_observer{nullptr};
 
-bool IsLogExplicitlyEnabled() {
-  static const bool enabled = [] {
-    const char* v = std::getenv("MOCKTAIL_ANDROID_LOG");
-    return v != nullptr && v[0] != '\0' && std::strcmp(v, "0") != 0;
-  }();
-  return enabled;
+void NotifyObserver(int priority, const char* tag, const char* message) {
+  MocktailAndroidLogObserver observer =
+      g_log_observer.load(std::memory_order_acquire);
+  if (observer != nullptr) {
+    observer(priority, tag, message);
+  }
 }
 
 }  // namespace
@@ -56,13 +53,6 @@ void mocktail_android_log_set_observer(MocktailAndroidLogObserver observer) {
 }
 
 int __android_log_print(int prio, const char* tag, const char* fmt, ...) {
-  MocktailAndroidLogObserver observer =
-      g_log_observer.load(std::memory_order_relaxed);
-  const bool log_active = IsLogExplicitlyEnabled() || observer != nullptr;
-  if (__builtin_expect(!log_active, 1)) {
-    return 0;
-  }
-
   va_list args;
   va_start(args, fmt);
   va_list observer_args;
@@ -72,38 +62,19 @@ int __android_log_print(int prio, const char* tag, const char* fmt, ...) {
     (void)vsnprintf(message, sizeof(message), fmt, observer_args);
   }
   va_end(observer_args);
-
-  if (IsLogExplicitlyEnabled()) {
-    fprintf(stderr, "[%s/%s] ", PriorityChar(prio), tag ? tag : "?");
-    if (fmt != nullptr) {
-      vfprintf(stderr, fmt, args);
-    }
-    fprintf(stderr, "\n");
-  }
+  fprintf(stderr, "[%s/%s] ", PriorityChar(prio), tag ? tag : "?");
+  int ret = fmt != nullptr ? vfprintf(stderr, fmt, args) : 0;
+  fprintf(stderr, "\n");
   va_end(args);
-
-  if (observer != nullptr) {
-    observer(prio, tag, message);
-  }
-  return 0;
+  NotifyObserver(prio, tag, message);
+  return ret;
 }
 
 int __android_log_write(int prio, const char* tag, const char* text) {
-  MocktailAndroidLogObserver observer =
-      g_log_observer.load(std::memory_order_relaxed);
-  const bool log_active = IsLogExplicitlyEnabled() || observer != nullptr;
-  if (__builtin_expect(!log_active, 1)) {
-    return 0;
-  }
-
-  if (IsLogExplicitlyEnabled()) {
-    fprintf(stderr, "[%s/%s] %s\n", PriorityChar(prio),
-            tag ? tag : "?", text ? text : "");
-  }
-  if (observer != nullptr) {
-    observer(prio, tag, text ? text : "");
-  }
-  return 0;
+  const int result = fprintf(stderr, "[%s/%s] %s\n", PriorityChar(prio),
+                             tag ? tag : "?", text ? text : "");
+  NotifyObserver(prio, tag, text ? text : "");
+  return result;
 }
 
 void __android_log_assert(const char* cond, const char* tag,

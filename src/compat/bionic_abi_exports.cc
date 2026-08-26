@@ -652,7 +652,6 @@ int mocktail_pthread_cond_destroy(pthread_cond_t* cond) {
   if (!mocktail_host_sync_tables_ready()) {
     return ENOMEM;
   }
-  g_mocktail_host_cond_cache_epoch.fetch_add(1, std::memory_order_release);
   const uintptr_t guest_address = reinterpret_cast<uintptr_t>(cond);
   const size_t bucket_index = mocktail_host_sync_bucket(guest_address);
   pthread_mutex_t* shard =
@@ -667,6 +666,11 @@ int mocktail_pthread_cond_destroy(pthread_cond_t* cond) {
         ::pthread_mutex_unlock(shard);
         return 0;
       }
+      // Publish invalidation while holding the same shard that protects the
+      // entry.  Otherwise another thread can cache the old entry with the
+      // newly published epoch immediately before it is freed.
+      g_mocktail_host_cond_cache_epoch.fetch_add(1,
+                                                 std::memory_order_release);
       *link = entry->next;
       ::pthread_mutex_unlock(shard);
       std::free(entry);

@@ -90,6 +90,7 @@ int RunGraphicsPolicyProbe(const char* backend) {
            "MOCKTAIL_SOFTWARE_WINDOW_FALLBACK",
            "MOCKTAIL_REQUIRE_REAL_GRAPHICS",
            "MOCKTAIL_CLIENT_SETTINGS_OVERRIDES_JSON",
+           "ANV_SYS_MEM_LIMIT",
        }) {
     if (unsetenv(name) != 0) return 20;
   }
@@ -117,12 +118,15 @@ int RunGraphicsPolicyProbe(const char* backend) {
     return disable_angle != nullptr && software != nullptr &&
                    std::string(disable_angle) == "1" &&
                    std::string(software) == "0" &&
-                   getenv("MOCKTAIL_CLIENT_SETTINGS_OVERRIDES_JSON") == nullptr
+                   getenv("MOCKTAIL_CLIENT_SETTINGS_OVERRIDES_JSON") == nullptr &&
+                   getenv("ANV_SYS_MEM_LIMIT") == nullptr
                ? 0
                : 24;
   }
   const char* overrides = getenv("MOCKTAIL_CLIENT_SETTINGS_OVERRIDES_JSON");
-  return overrides != nullptr &&
+  const char* anv_memory_limit = getenv("ANV_SYS_MEM_LIMIT");
+  return overrides != nullptr && anv_memory_limit != nullptr &&
+                 std::string(anv_memory_limit) == "50" &&
                  std::string(overrides).find(
                      "FStringGraphicsVulkanShaderMTDenyPattern") !=
                      std::string::npos

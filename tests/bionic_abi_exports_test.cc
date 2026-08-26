@@ -378,4 +378,49 @@ TEST(BionicAbiExportsTest, InvalidatesRemoteMutexCacheAcrossAddressReuse) {
   EXPECT_EQ(0, mocktail_pthread_mutex_destroy(&allocator_spacer));
 }
 
+TEST(BionicAbiExportsTest, InvalidatesRemoteConditionCacheAcrossAddressReuse) {
+  pthread_cond_t guest_condition{};
+  pthread_cond_t allocator_spacer{};
+  pthread_mutex_t guest_mutex{};
+  ASSERT_EQ(0, mocktail_pthread_cond_init(&guest_condition, nullptr));
+  ASSERT_EQ(0, mocktail_pthread_mutex_init(&guest_mutex, nullptr));
+
+  std::atomic<bool> cache_ready{false};
+  std::atomic<bool> replacement_ready{false};
+  std::atomic<int> signal_result{EINVAL};
+  std::thread worker([&] {
+    ASSERT_EQ(0, mocktail_pthread_cond_signal(&guest_condition));
+    cache_ready.store(true, std::memory_order_release);
+    while (!replacement_ready.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+    ASSERT_EQ(0, mocktail_pthread_mutex_lock(&guest_mutex));
+    signal_result.store(mocktail_pthread_cond_signal(&guest_condition),
+                        std::memory_order_release);
+    EXPECT_EQ(0, mocktail_pthread_mutex_unlock(&guest_mutex));
+  });
+
+  while (!cache_ready.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  ASSERT_EQ(0, mocktail_pthread_cond_destroy(&guest_condition));
+  ASSERT_EQ(0, mocktail_pthread_cond_init(&allocator_spacer, nullptr));
+  ASSERT_EQ(0, mocktail_pthread_cond_init(&guest_condition, nullptr));
+
+  ASSERT_EQ(0, mocktail_pthread_mutex_lock(&guest_mutex));
+  replacement_ready.store(true, std::memory_order_release);
+  timespec deadline{};
+  ASSERT_EQ(0, clock_gettime(CLOCK_REALTIME, &deadline));
+  deadline.tv_sec += 2;
+  EXPECT_EQ(0, mocktail_pthread_cond_timedwait(
+                   &guest_condition, &guest_mutex, &deadline));
+  EXPECT_EQ(0, mocktail_pthread_mutex_unlock(&guest_mutex));
+  worker.join();
+
+  EXPECT_EQ(0, signal_result.load(std::memory_order_acquire));
+  EXPECT_EQ(0, mocktail_pthread_cond_destroy(&guest_condition));
+  EXPECT_EQ(0, mocktail_pthread_cond_destroy(&allocator_spacer));
+  EXPECT_EQ(0, mocktail_pthread_mutex_destroy(&guest_mutex));
+}
+
 }  // namespace
