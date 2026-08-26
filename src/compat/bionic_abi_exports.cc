@@ -338,6 +338,12 @@ struct MocktailHostMutexCacheEntry {
   uint64_t epoch = 0;
 };
 
+struct MocktailHostCondCacheEntry {
+  uintptr_t guest_address = 0;
+  pthread_cond_t* host_cond = nullptr;
+  uint64_t epoch = 0;
+};
+
 MocktailHostMutexEntry* g_mocktail_host_mutex_buckets[kHostSyncBucketCount]{};
 MocktailHostCondEntry* g_mocktail_host_cond_buckets[kHostSyncBucketCount]{};
 pthread_mutex_t g_mocktail_host_mutex_shards[kHostSyncShardCount];
@@ -346,9 +352,13 @@ pthread_once_t g_mocktail_host_sync_once = PTHREAD_ONCE_INIT;
 std::atomic<int> g_mocktail_host_sync_init_result{0};
 std::atomic<bool> g_mocktail_host_sync_ready{false};
 std::atomic<uint64_t> g_mocktail_host_mutex_cache_epoch{1};
+std::atomic<uint64_t> g_mocktail_host_cond_cache_epoch{1};
 thread_local std::array<MocktailHostMutexCacheEntry,
                         kHostMutexThreadCacheCount>
     g_mocktail_host_mutex_cache;
+thread_local std::array<MocktailHostCondCacheEntry,
+                        kHostMutexThreadCacheCount>
+    g_mocktail_host_cond_cache;
 
 void mocktail_initialize_host_sync_tables() {
   for (size_t i = 0; i < kHostSyncShardCount; ++i) {
@@ -539,17 +549,14 @@ void mocktail_record_host_mutex_unlock(MocktailHostMutexEntry* entry) {
   }
 }
 
-pthread_cond_t* mocktail_get_host_cond(
+pthread_cond_t* mocktail_get_host_cond_slow(
     pthread_cond_t* guest_cond, bool create,
-    const pthread_condattr_t* host_attributes = nullptr) {
-  if (guest_cond == nullptr || mocktail_is_low_bionic_pointer(guest_cond)) {
-    return nullptr;
-  }
+    const pthread_condattr_t* host_attributes, uintptr_t guest_address,
+    uint64_t cache_epoch, MocktailHostCondCacheEntry* cached) {
   if (!mocktail_host_sync_tables_ready()) {
     return nullptr;
   }
 
-  const uintptr_t guest_address = reinterpret_cast<uintptr_t>(guest_cond);
   const size_t bucket_index = mocktail_host_sync_bucket(guest_address);
   pthread_mutex_t* shard =
       &g_mocktail_host_cond_shards[bucket_index & (kHostSyncShardCount - 1)];
@@ -559,6 +566,7 @@ pthread_cond_t* mocktail_get_host_cond(
        entry != nullptr; entry = entry->next) {
     if (entry->guest_address == guest_address) {
       ::pthread_mutex_unlock(shard);
+      *cached = {guest_address, &entry->host_cond, cache_epoch};
       return &entry->host_cond;
     }
   }
@@ -587,7 +595,28 @@ pthread_cond_t* mocktail_get_host_cond(
   entry->next = g_mocktail_host_cond_buckets[bucket_index];
   g_mocktail_host_cond_buckets[bucket_index] = entry;
   ::pthread_mutex_unlock(shard);
+  *cached = {guest_address, &entry->host_cond, cache_epoch};
   return &entry->host_cond;
+}
+
+__attribute__((always_inline)) inline pthread_cond_t*
+mocktail_get_host_cond(pthread_cond_t* guest_cond, bool create,
+                       const pthread_condattr_t* host_attributes = nullptr) {
+  if (guest_cond == nullptr || mocktail_is_low_bionic_pointer(guest_cond)) {
+    return nullptr;
+  }
+  const uintptr_t guest_address = reinterpret_cast<uintptr_t>(guest_cond);
+  const uint64_t cache_epoch =
+      g_mocktail_host_cond_cache_epoch.load(std::memory_order_acquire);
+  MocktailHostCondCacheEntry& cached =
+      g_mocktail_host_cond_cache[(guest_address >> 3) &
+                                 (kHostMutexThreadCacheCount - 1)];
+  if (cached.epoch == cache_epoch &&
+      cached.guest_address == guest_address) {
+    return cached.host_cond;
+  }
+  return mocktail_get_host_cond_slow(
+      guest_cond, create, host_attributes, guest_address, cache_epoch, &cached);
 }
 
 int mocktail_pthread_condattr_init(pthread_condattr_t* attr) {
@@ -623,6 +652,7 @@ int mocktail_pthread_cond_destroy(pthread_cond_t* cond) {
   if (!mocktail_host_sync_tables_ready()) {
     return ENOMEM;
   }
+  g_mocktail_host_cond_cache_epoch.fetch_add(1, std::memory_order_release);
   const uintptr_t guest_address = reinterpret_cast<uintptr_t>(cond);
   const size_t bucket_index = mocktail_host_sync_bucket(guest_address);
   pthread_mutex_t* shard =
