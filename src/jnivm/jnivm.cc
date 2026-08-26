@@ -295,6 +295,16 @@ std::shared_ptr<Class> FallbackClassForName(const std::string& class_name) {
   return cls;
 }
 
+std::shared_ptr<Class> JavaStringClass() {
+  static const auto string_class = FallbackClassForName("java/lang/String");
+  return string_class;
+}
+
+std::shared_ptr<Class> JavaObjectClass() {
+  static const auto object_class = FallbackClassForName("java/lang/Object");
+  return object_class;
+}
+
 bool TraceEnabled() {
   static const bool enabled = std::getenv("MOCKTAIL_JNI_TRACE") != nullptr;
   return enabled;
@@ -597,7 +607,7 @@ jobject MakeObjectForClass(const std::string& class_name) {
 jobject MakeObject(jclass clazz) {
   auto cls = ClassFromJClass(clazz);
   if (!cls) {
-    cls = FallbackClassForName("java/lang/Object");
+    cls = JavaObjectClass();
   }
   return StoreObject(std::make_unique<PseudoJavaObject>(std::move(cls)));
 }
@@ -690,7 +700,7 @@ void SetBooleanFieldRaw(jobject obj, const char* field_name, jboolean value) {
 
 jstring MakeString(const char* utf) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
-  auto cls = FallbackClassForName("java/lang/String");
+  auto cls = JavaStringClass();
   auto object = std::make_unique<PseudoStringObject>(std::move(cls), utf);
   jobject handle = StoreObject(std::move(object));
   jstring str = reinterpret_cast<jstring>(handle);
@@ -700,7 +710,7 @@ jstring MakeString(const char* utf) {
 
 jstring MakeUtf16String(const jchar* utf16, jsize length) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
-  auto cls = FallbackClassForName("java/lang/String");
+  auto cls = JavaStringClass();
   auto object =
       std::make_unique<PseudoStringObject>(std::move(cls), utf16, length);
   jobject handle = StoreObject(std::move(object));
@@ -6093,12 +6103,12 @@ void VM::InitJNIFunctionTables() {
     if (pseudo_object) {
       return StoreClass(pseudo_object->GetClass());
     }
-    return StoreClass(FallbackClassForName("java/lang/Object"));
+    return StoreClass(JavaObjectClass());
   };
 
   native_interface_.GetSuperclass =
       [](JNIEnv* /*env*/, jclass /*sub*/) -> jclass {
-    return StoreClass(FallbackClassForName("java/lang/Object"));
+    return StoreClass(JavaObjectClass());
   };
 
   native_interface_.IsAssignableFrom =
