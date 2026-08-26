@@ -19,8 +19,11 @@ constexpr VkSurfaceKHR kMockSurface = 1;
 int g_instance_handle;
 
 bool TestVulkanStubEnabled() {
-  const char* value = std::getenv("MOCKTAIL_ENABLE_TEST_GRAPHICS_STUBS");
-  return value != nullptr && std::strcmp(value, "1") == 0;
+  static const bool enabled = [] {
+    const char* value = std::getenv("MOCKTAIL_ENABLE_TEST_GRAPHICS_STUBS");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+  }();
+  return enabled;
 }
 
 }  // namespace
