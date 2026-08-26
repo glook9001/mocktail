@@ -241,7 +241,7 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
     const std::string workers = std::to_string(render_worker_count);
     const std::string occlusion_workers =
         std::to_string(std::max(1, render_worker_count / 2));
-    const std::array<ClientSetting, 64> rendering_settings = {{
+    const std::array<ClientSetting, 68> rendering_settings = {{
         {"FIntSmoothClusterTaskQueueMaxParallelTasks", workers},
         {"FIntOcclusionWorkerThreadCount", occlusion_workers},
         {"FFlagMovePrerenderV2", "True"},
@@ -306,6 +306,10 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
         {"FIntLuaGcMaxKb", "262144"},
         {"FIntTaskSchedulerMaxTempArenaSizeBytes", "16777216"},
         {"FFlagLocalStorageArenaOptimization", "True"},
+        {"FIntProjectedMaxBytesUsedForSoundsMB", "32"},
+        {"FIntAudioMetadataCacheSizeKB", "2048"},
+        {"FIntDefaultAudioDecodeBufferSizeMs", "50"},
+        {"FIntMaxAudibleSoundChannels", "32"},
     }};
     if (!apply_settings(rendering_settings)) {
       return false;
