@@ -3371,6 +3371,7 @@ void RegisterBionicPathWrappers() {
   linker::RegisterSymbol("readlink", reinterpret_cast<void*>(mocktail_readlink));
   linker::RegisterSymbol("__readlink_chk",
                          reinterpret_cast<void*>(mocktail___readlink_chk));
+  linker::RegisterSymbol("madvise", reinterpret_cast<void*>(mocktail_madvise));
 }
 
 mocktail::runtime::RuntimePaths CurrentRuntimePaths() {
