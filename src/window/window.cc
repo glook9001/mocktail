@@ -2133,6 +2133,9 @@ void PaceInputPump() {
   if (!g_state.initialised) {
     return;
   }
+  if (__builtin_expect(SDL_HasEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST), 0)) {
+    return;
+  }
   const uint64_t delay_ns =
       g_input_pump_pacer.DelayBeforeNextPump(SDL_GetTicksNS());
   if (delay_ns != 0) {

@@ -71,7 +71,12 @@ struct OpenSlSimpleBufferQueueAdapter::State
         max_buffers(options.max_buffers),
         event_callback(options.event_callback),
         event_context(options.event_context),
-        ticket_pool(options.max_buffers) {}
+        ticket_pool(options.max_buffers) {
+    free_tickets.reserve(options.max_buffers);
+    for (std::size_t i = options.max_buffers; i > 0; --i) {
+      free_tickets.push_back(i - 1);
+    }
+  }
 
   static const AndroidSimpleBufferQueueTable kQueueTable;
 
@@ -104,34 +109,26 @@ struct OpenSlSimpleBufferQueueAdapter::State
       if (state->stopping) {
         return opensl_abi::kResultPreconditionsViolated;
       }
-      if (state->pending_count >= state->max_buffers) {
+      if (state->pending_count >= state->max_buffers ||
+          state->free_tickets.empty()) {
         return opensl_abi::kResultBufferInsufficient;
       }
-      for (auto& slot : state->ticket_pool) {
-        if (!slot.in_use) {
-          ticket = &slot;
-          break;
-        }
-      }
-      if (ticket == nullptr) {
-        return opensl_abi::kResultBufferInsufficient;
-      }
+      const std::size_t slot_index = state->free_tickets.back();
+      state->free_tickets.pop_back();
+      ticket = &state->ticket_pool[slot_index];
       id = state->next_id++;
       ticket->state = state;
       ticket->id = id;
       ticket->generation = state->generation;
       ticket->in_use = true;
       ++state->pending_count;
+      ++state->submitted_buffers;
     }
 
     const PcmBuffer pcm{buffer, static_cast<std::size_t>(size),
                         &State::ReleaseBuffer, ticket};
     const Status status = state->sink->Enqueue(pcm);
     if (status.ok()) {
-      {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        ++state->submitted_buffers;
-      }
       state->NotifyEvent(OpenSlBufferQueueEvent::kSubmitted,
                          static_cast<std::size_t>(size));
       return opensl_abi::kResultSuccess;
@@ -143,8 +140,14 @@ struct OpenSlSimpleBufferQueueAdapter::State
       if (ticket->in_use && ticket->id == id) {
         ticket->in_use = false;
         ticket->state.reset();
+        const std::size_t slot_index =
+            static_cast<std::size_t>(ticket - state->ticket_pool.data());
+        state->free_tickets.push_back(slot_index);
         if (state->pending_count > 0) {
           --state->pending_count;
+        }
+        if (state->submitted_buffers > 0) {
+          --state->submitted_buffers;
         }
       }
     }
@@ -166,12 +169,16 @@ struct OpenSlSimpleBufferQueueAdapter::State
         return opensl_abi::kResultPreconditionsViolated;
       }
       ++state->generation;
+      state->free_tickets.clear();
       for (auto& ticket : state->ticket_pool) {
         if (ticket.in_use) {
           ticket.in_use = false;
           ticket.state.reset();
           ++discarded_count;
         }
+      }
+      for (std::size_t i = state->max_buffers; i > 0; --i) {
+        state->free_tickets.push_back(i - 1);
       }
       state->discarded_buffers += discarded_count;
       state->pending_count = 0;
@@ -232,6 +239,9 @@ struct OpenSlSimpleBufferQueueAdapter::State
       if (ticket->in_use) {
         ticket->in_use = false;
         ticket->state.reset();
+        const std::size_t slot_index =
+            static_cast<std::size_t>(ticket - state->ticket_pool.data());
+        state->free_tickets.push_back(slot_index);
         if (state->pending_count > 0) {
           --state->pending_count;
         }
@@ -362,6 +372,7 @@ struct OpenSlSimpleBufferQueueAdapter::State
   Handle handle;
   pthread_t callback_thread{};
   std::vector<ReleaseTicket> ticket_pool;
+  std::vector<std::size_t> free_tickets;
   std::size_t pending_count = 0;
   std::deque<CallbackJob> callback_jobs;
   AndroidSimpleBufferQueueCallback callback = nullptr;

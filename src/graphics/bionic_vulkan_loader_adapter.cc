@@ -191,6 +191,8 @@ struct AdapterState {
   bool initialized = false;
 };
 
+static std::atomic<bool> g_vulkan_call_observation_active{false};
+
 AdapterState& State() {
   static AdapterState state;
   return state;
@@ -214,7 +216,7 @@ bool EnsureInitialized() {
       ResolveProcessFunction<UsesDirectVulkanFn>(
           "mocktail_window_uses_direct_vulkan");
   state.note_present.store(ResolveProcessFunction<NotePresentFn>(
-                               "mocktail_window_note_vulkan_present"),
+                                "mocktail_window_note_vulkan_present"),
                            std::memory_order_release);
   state.note_host_present_begin.store(
       ResolveProcessFunction<NoteHostPresentBeginFn>(
@@ -224,14 +226,14 @@ bool EnsureInitialized() {
       ResolveProcessFunction<NoteHostPresentEndFn>(
           "mocktail_window_note_vulkan_host_present_end"),
       std::memory_order_release);
-  state.note_vulkan_call_begin.store(
-      ResolveProcessFunction<NoteVulkanCallBeginFn>(
-          "mocktail_window_note_vulkan_call_begin"),
-      std::memory_order_release);
-  state.note_vulkan_call_end.store(
-      ResolveProcessFunction<NoteVulkanCallEndFn>(
-          "mocktail_window_note_vulkan_call_end"),
-      std::memory_order_release);
+  const auto call_begin = ResolveProcessFunction<NoteVulkanCallBeginFn>(
+      "mocktail_window_note_vulkan_call_begin");
+  const auto call_end = ResolveProcessFunction<NoteVulkanCallEndFn>(
+      "mocktail_window_note_vulkan_call_end");
+  state.note_vulkan_call_begin.store(call_begin, std::memory_order_release);
+  state.note_vulkan_call_end.store(call_end, std::memory_order_release);
+  g_vulkan_call_observation_active.store(
+      call_begin != nullptr && call_end != nullptr, std::memory_order_release);
   state.note_surface_out_of_date.store(
       ResolveProcessFunction<NoteSurfaceOutOfDateFn>(
           "mocktail_window_note_vulkan_surface_out_of_date"),
@@ -333,7 +335,9 @@ void InvalidateFastDispatchCaches() {
   g_dispatch_generation.fetch_add(1, std::memory_order_release);
 }
 
-AdapterState::DeviceDispatch HostDispatchForQueue(VkQueue queue) {
+static const AdapterState::DeviceDispatch kEmptyDeviceDispatch{};
+
+const AdapterState::DeviceDispatch& HostDispatchForQueue(VkQueue queue) {
   const uint64_t gen = g_dispatch_generation.load(std::memory_order_acquire);
   if (__builtin_expect(queue != VK_NULL_HANDLE &&
                            t_queue_cache.queue == queue &&
@@ -349,7 +353,7 @@ AdapterState::DeviceDispatch HostDispatchForQueue(VkQueue queue) {
                      return candidate.queue == queue;
                    });
   if (binding == state.queue_bindings.end()) {
-    return {};
+    return kEmptyDeviceDispatch;
   }
   const auto dispatch = std::find_if(
       state.device_dispatches.begin(), state.device_dispatches.end(),
@@ -360,12 +364,12 @@ AdapterState::DeviceDispatch HostDispatchForQueue(VkQueue queue) {
     t_queue_cache.generation = gen;
     t_queue_cache.queue = queue;
     t_queue_cache.dispatch = *dispatch;
-    return *dispatch;
+    return t_queue_cache.dispatch;
   }
-  return {};
+  return kEmptyDeviceDispatch;
 }
 
-AdapterState::DeviceDispatch HostDispatchForDevice(VkDevice device) {
+const AdapterState::DeviceDispatch& HostDispatchForDevice(VkDevice device) {
   const uint64_t gen = g_dispatch_generation.load(std::memory_order_acquire);
   if (__builtin_expect(device != VK_NULL_HANDLE &&
                            t_device_cache.device == device &&
@@ -384,12 +388,12 @@ AdapterState::DeviceDispatch HostDispatchForDevice(VkDevice device) {
     t_device_cache.generation = gen;
     t_device_cache.device = device;
     t_device_cache.dispatch = *dispatch;
-    return *dispatch;
+    return t_device_cache.dispatch;
   }
-  return {};
+  return kEmptyDeviceDispatch;
 }
 
-AdapterState::DeviceDispatch HostDispatchForCommandBuffer(
+const AdapterState::DeviceDispatch& HostDispatchForCommandBuffer(
     VkCommandBuffer command_buffer) {
   const uint64_t gen = g_dispatch_generation.load(std::memory_order_acquire);
   if (__builtin_expect(command_buffer != VK_NULL_HANDLE &&
@@ -408,7 +412,7 @@ AdapterState::DeviceDispatch HostDispatchForCommandBuffer(
         return candidate.command_buffer == command_buffer;
       });
   if (binding == state.command_buffer_bindings.end()) {
-    return {};
+    return kEmptyDeviceDispatch;
   }
   const auto dispatch = std::find_if(
       state.device_dispatches.begin(), state.device_dispatches.end(),
@@ -419,9 +423,9 @@ AdapterState::DeviceDispatch HostDispatchForCommandBuffer(
     t_command_buffer_cache.generation = gen;
     t_command_buffer_cache.command_buffer = command_buffer;
     t_command_buffer_cache.dispatch = *dispatch;
-    return *dispatch;
+    return t_command_buffer_cache.dispatch;
   }
-  return {};
+  return kEmptyDeviceDispatch;
 }
 
 void RegisterHostDeviceDispatch(VkDevice device,
@@ -844,16 +848,20 @@ class VulkanCallObservation final {
  public:
   explicit VulkanCallObservation(const char* call_name)
       : call_name_(call_name) {
-    AdapterState& state = State();
-    begin_ = state.note_vulkan_call_begin.load(std::memory_order_acquire);
-    end_ = state.note_vulkan_call_end.load(std::memory_order_acquire);
-    if (begin_ != nullptr && end_ != nullptr) {
-      sequence_ = begin_(call_name);
+    if (__builtin_expect(
+            g_vulkan_call_observation_active.load(std::memory_order_relaxed),
+            0)) {
+      AdapterState& state = State();
+      begin_ = state.note_vulkan_call_begin.load(std::memory_order_acquire);
+      end_ = state.note_vulkan_call_end.load(std::memory_order_acquire);
+      if (begin_ != nullptr && end_ != nullptr) {
+        sequence_ = begin_(call_name);
+      }
     }
   }
 
   ~VulkanCallObservation() {
-    if (sequence_ != 0 && end_ != nullptr) {
+    if (__builtin_expect(sequence_ != 0 && end_ != nullptr, 0)) {
       end_(sequence_, static_cast<std::int32_t>(result_));
     }
   }
@@ -863,16 +871,18 @@ class VulkanCallObservation final {
 
   void SetResult(VkResult result) {
     result_ = result;
-    std::uint64_t occurrence = 0;
-    if (result < VK_SUCCESS && result != VK_ERROR_OUT_OF_DATE_KHR &&
-        ShouldLogNegativeVulkanResult(result, &occurrence)) {
-      std::fprintf(stderr,
-                   "  [vulkan] unexpected negative result: call=%s "
-                   "result=%d device_lost=%u occurrence=%llu\n",
-                   call_name_ != nullptr ? call_name_ : "unknown",
-                   static_cast<int>(result),
-                   result == VK_ERROR_DEVICE_LOST ? 1U : 0U,
-                   static_cast<unsigned long long>(occurrence));
+    if (__builtin_expect(
+            result < VK_SUCCESS && result != VK_ERROR_OUT_OF_DATE_KHR, 0)) {
+      std::uint64_t occurrence = 0;
+      if (ShouldLogNegativeVulkanResult(result, &occurrence)) {
+        std::fprintf(stderr,
+                     "  [vulkan] unexpected negative result: call=%s "
+                     "result=%d device_lost=%u occurrence=%llu\n",
+                     call_name_ != nullptr ? call_name_ : "unknown",
+                     static_cast<int>(result),
+                     result == VK_ERROR_DEVICE_LOST ? 1U : 0U,
+                     static_cast<unsigned long long>(occurrence));
+      }
     }
   }
 
@@ -1054,6 +1064,7 @@ vkDestroyInstance(VkInstance instance, const VkAllocationCallbacks* allocator) {
     state.note_host_present_end.store(nullptr, std::memory_order_release);
     state.note_vulkan_call_begin.store(nullptr, std::memory_order_release);
     state.note_vulkan_call_end.store(nullptr, std::memory_order_release);
+    g_vulkan_call_observation_active.store(false, std::memory_order_release);
     state.note_surface_out_of_date.store(nullptr, std::memory_order_release);
     state.extent_translation_logged = false;
     state.present_policy_logged = false;
