@@ -78,9 +78,15 @@ bool HasPrefix(std::string_view value, std::string_view prefix) {
 }
 
 #ifdef MOCKTAIL_USE_BIONIC_LINKER
+bool LinkerTraceEnabled() {
+  static const bool enabled = std::getenv("MOCKTAIL_TRACE_LINKER") != nullptr;
+  return enabled;
+}
+
 void* BionicDlopenBoundary(const char* filename, int flags) {
   void* handle = ::linker::dlopen(filename, flags);
-  if (filename != nullptr && std::strstr(filename, "vulkan") != nullptr) {
+  if (__builtin_expect(LinkerTraceEnabled(), 0) && filename != nullptr &&
+      std::strstr(filename, "vulkan") != nullptr) {
     std::cerr << "  [bionic-libdl] dlopen(" << filename << ") -> " << handle
               << '\n';
   }
@@ -92,7 +98,8 @@ void* BionicDlsymBoundary(void* handle, const char* symbol) {
     return nullptr;
   }
   void* address = ::linker::dlsym(handle, symbol);
-  if (symbol != nullptr && std::strncmp(symbol, "vk", 2) == 0) {
+  if (__builtin_expect(LinkerTraceEnabled(), 0) && symbol != nullptr &&
+      std::strncmp(symbol, "vk", 2) == 0) {
     std::cerr << "  [bionic-libdl] dlsym(" << symbol << ") -> " << address
               << '\n';
   }

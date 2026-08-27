@@ -948,7 +948,7 @@ const char* StringChars(jstring str) {
     return nullptr;
   }
   if (g_known_strings.find(str) != g_known_strings.end()) {
-    auto* string_object = dynamic_cast<PseudoStringObject*>(
+    auto* string_object = static_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
     return string_object ? string_object->modified_utf8.c_str() : "";
   }
@@ -961,7 +961,7 @@ const jchar* StringUtf16Chars(jstring str) {
     return nullptr;
   }
   if (g_known_strings.find(str) != g_known_strings.end()) {
-    auto* string_object = dynamic_cast<PseudoStringObject*>(
+    auto* string_object = static_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
     return string_object && !string_object->chars.empty()
                ? string_object->chars.data()
@@ -973,7 +973,7 @@ const jchar* StringUtf16Chars(jstring str) {
 jsize StringUtf16Length(jstring str) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   if (g_known_strings.find(str) != g_known_strings.end()) {
-    auto* string_object = dynamic_cast<PseudoStringObject*>(
+    auto* string_object = static_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
     return string_object != nullptr
                ? static_cast<jsize>(string_object->chars.size())
@@ -986,7 +986,7 @@ jsize StringUtf16Length(jstring str) {
 jsize StringModifiedUtf8Length(jstring str) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   if (g_known_strings.find(str) != g_known_strings.end()) {
-    auto* string_object = dynamic_cast<PseudoStringObject*>(
+    auto* string_object = static_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
     return string_object != nullptr
                ? static_cast<jsize>(string_object->modified_utf8.size())
@@ -1001,7 +1001,7 @@ void CopyStringRegion(jstring str, jsize start, jsize length, jchar* output) {
     return;
   }
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
-  auto* string_object = dynamic_cast<PseudoStringObject*>(
+  auto* string_object = static_cast<PseudoStringObject*>(
       PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
   if (string_object == nullptr ||
       static_cast<std::size_t>(start) >= string_object->chars.size()) {
@@ -1019,7 +1019,7 @@ void CopyStringModifiedUtf8Region(jstring str, jsize start, jsize length,
     return;
   }
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
-  auto* string_object = dynamic_cast<PseudoStringObject*>(
+  auto* string_object = static_cast<PseudoStringObject*>(
       PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
   if (string_object == nullptr ||
       static_cast<std::size_t>(start) >= string_object->chars.size()) {
