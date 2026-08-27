@@ -166,20 +166,20 @@ struct RuntimeObject {
   std::atomic<bool> consumption_reported{false};
 };
 
+RuntimeObject* ResolveActiveObject(RuntimeObject* object) {
+  if (object == nullptr || object->magic != kRuntimeObjectMagic) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
+  return g_active_objects.find(object) != g_active_objects.end() ? object : nullptr;
+}
+
 RuntimeObject* FromObject(abi::Object self) {
   if (self == nullptr) {
     return nullptr;
   }
   const auto* handle = reinterpret_cast<const ObjectHandle*>(self);
-  RuntimeObject* object = handle->object;
-  if (object == nullptr) {
-    return nullptr;
-  }
-  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
-  if (g_active_objects.find(object) == g_active_objects.end()) {
-    return nullptr;
-  }
-  return object->magic == kRuntimeObjectMagic ? object : nullptr;
+  return ResolveActiveObject(handle->object);
 }
 
 RuntimeObject* FromEngine(abi::Engine self) {
@@ -187,15 +187,7 @@ RuntimeObject* FromEngine(abi::Engine self) {
     return nullptr;
   }
   const auto* handle = reinterpret_cast<const EngineHandle*>(self);
-  RuntimeObject* object = handle->object;
-  if (object == nullptr) {
-    return nullptr;
-  }
-  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
-  if (g_active_objects.find(object) == g_active_objects.end()) {
-    return nullptr;
-  }
-  return object->magic == kRuntimeObjectMagic ? object : nullptr;
+  return ResolveActiveObject(handle->object);
 }
 
 RuntimeObject* FromPlay(abi::Play self) {
@@ -203,15 +195,7 @@ RuntimeObject* FromPlay(abi::Play self) {
     return nullptr;
   }
   const auto* handle = reinterpret_cast<const PlayHandle*>(self);
-  RuntimeObject* object = handle->object;
-  if (object == nullptr) {
-    return nullptr;
-  }
-  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
-  if (g_active_objects.find(object) == g_active_objects.end()) {
-    return nullptr;
-  }
-  return object->magic == kRuntimeObjectMagic ? object : nullptr;
+  return ResolveActiveObject(handle->object);
 }
 
 RuntimeObject* FromVolume(abi::Volume self) {
@@ -219,15 +203,7 @@ RuntimeObject* FromVolume(abi::Volume self) {
     return nullptr;
   }
   const auto* handle = reinterpret_cast<const VolumeHandle*>(self);
-  RuntimeObject* object = handle->object;
-  if (object == nullptr) {
-    return nullptr;
-  }
-  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
-  if (g_active_objects.find(object) == g_active_objects.end()) {
-    return nullptr;
-  }
-  return object->magic == kRuntimeObjectMagic ? object : nullptr;
+  return ResolveActiveObject(handle->object);
 }
 
 RuntimeObject* FromConfiguration(abi::AndroidConfiguration self) {
@@ -235,15 +211,7 @@ RuntimeObject* FromConfiguration(abi::AndroidConfiguration self) {
     return nullptr;
   }
   const auto* handle = reinterpret_cast<const ConfigurationHandle*>(self);
-  RuntimeObject* object = handle->object;
-  if (object == nullptr) {
-    return nullptr;
-  }
-  std::lock_guard<std::mutex> lock(g_active_objects_mutex);
-  if (g_active_objects.find(object) == g_active_objects.end()) {
-    return nullptr;
-  }
-  return object->magic == kRuntimeObjectMagic ? object : nullptr;
+  return ResolveActiveObject(handle->object);
 }
 
 bool InterfaceIdEquals(abi::InterfaceId left, abi::InterfaceId right) {

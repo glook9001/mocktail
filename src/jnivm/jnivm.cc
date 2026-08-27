@@ -77,6 +77,8 @@ bool IsThreadLocalEnvValid() {
          g_thread_local_env->functions != nullptr;
 }
 
+void ReleaseJniReference(jobject obj);
+
 struct PseudoArray {
   std::vector<jbyte> bytes;
   std::vector<jfloat> floats;
@@ -219,32 +221,53 @@ std::vector<jchar> ModifiedUtf8ToUtf16(const char* input) {
   return output;
 }
 
+static std::unordered_set<std::string> g_interned_string_pool;
+
+static const char* InternString(const std::string& str) {
+  auto [it, _] = g_interned_string_pool.insert(str);
+  return it->c_str();
+}
+
+static std::vector<jchar> MakeUtf16Vector(const jchar* utf16, jsize length) {
+  if (utf16 != nullptr && length > 0) {
+    return std::vector<jchar>(utf16, utf16 + length);
+  }
+  return {};
+}
+
 struct PseudoStringObject : PseudoJavaObject {
   PseudoStringObject(std::shared_ptr<Class> cls, const char* utf)
       : PseudoJavaObject(std::move(cls)),
         chars(ModifiedUtf8ToUtf16(utf)),
         value(Utf16ToUtf8(chars)),
-        modified_utf8(Utf16ToModifiedUtf8(chars)) {}
+        modified_utf8(InternString(Utf16ToModifiedUtf8(chars))) {}
 
   PseudoStringObject(std::shared_ptr<Class> cls, const jchar* utf16,
                      jsize length)
-      : PseudoJavaObject(std::move(cls)) {
-    if (utf16 != nullptr && length > 0) {
-      chars.assign(utf16, utf16 + length);
-    }
-    value = Utf16ToUtf8(chars);
-    modified_utf8 = Utf16ToModifiedUtf8(chars);
-  }
+      : PseudoJavaObject(std::move(cls)),
+        chars(MakeUtf16Vector(utf16, length)),
+        value(Utf16ToUtf8(chars)),
+        modified_utf8(InternString(Utf16ToModifiedUtf8(chars))) {}
 
   std::vector<jchar> chars;
   std::string value;
-  std::string modified_utf8;
+  const char* modified_utf8 = nullptr;
 };
 
 using jnivm::my_segment;
 using jnivm::g_jni_ref_index;
 
+static bool g_shutting_down_jnivm = false;
+
+struct JniVmShutdownHook {
+  JniVmShutdownHook() {
+    std::atexit([]() { g_shutting_down_jnivm = true; });
+  }
+};
+static JniVmShutdownHook g_shutdown_hook;
+
 std::unordered_map<jobject, std::unique_ptr<Object>> g_object_storage;
+std::unordered_map<jobject, uint32_t> g_jni_ref_counts;
 std::shared_ptr<void> g_segment_owners[100000];
 std::unordered_set<jobject> g_known_objects;
 std::unordered_set<jclass> g_known_classes;
@@ -590,16 +613,30 @@ jobject StoreObject(std::unique_ptr<Object> object) {
       reinterpret_cast<jobject>(static_cast<uintptr_t>(index << 16));
   g_known_objects.insert(handle);
   g_object_storage[handle] = std::move(object);
+  g_jni_ref_counts[handle] = 1;
   return handle;
 }
 
 void ReleaseJniReference(jobject obj) {
-  if (obj == nullptr) {
+  if (obj == nullptr || g_shutting_down_jnivm) {
     return;
   }
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
+  if (g_shutting_down_jnivm) {
+    return;
+  }
+  auto ref_it = g_jni_ref_counts.find(obj);
+  if (ref_it != g_jni_ref_counts.end()) {
+    if (ref_it->second > 1) {
+      --ref_it->second;
+      return;
+    }
+    g_jni_ref_counts.erase(ref_it);
+  }
+
   auto arr_it = g_array_storage.find(reinterpret_cast<jarray>(obj));
   if (arr_it != g_array_storage.end()) {
+    std::unique_ptr<PseudoArray> dying_array = std::move(arr_it->second);
     g_arrays.erase(arr_it->first);
     g_array_storage.erase(arr_it);
     return;
@@ -621,7 +658,12 @@ void ReleaseJniReference(jobject obj) {
   }
   g_known_objects.erase(obj);
   g_known_strings.erase(reinterpret_cast<jstring>(obj));
-  g_object_storage.erase(obj);
+  std::unique_ptr<Object> dying_object;
+  auto obj_it = g_object_storage.find(obj);
+  if (obj_it != g_object_storage.end()) {
+    dying_object = std::move(obj_it->second);
+    g_object_storage.erase(obj_it);
+  }
 }
 
 PseudoJavaObject* PseudoObjectFromRef(jobject obj) {
@@ -704,7 +746,20 @@ void SetObjectFieldRaw(jobject obj, const char* field_name, jobject value) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   PseudoJavaObject* pseudo_object = PseudoObjectFromRef(obj);
   if (pseudo_object && field_name) {
+    if (value != nullptr) {
+      auto it = g_jni_ref_counts.find(value);
+      if (it != g_jni_ref_counts.end()) {
+        ++it->second;
+      } else {
+        g_jni_ref_counts[value] = 2;
+      }
+    }
+    auto it = pseudo_object->object_fields.find(field_name);
+    jobject prev = (it != pseudo_object->object_fields.end()) ? it->second : nullptr;
     pseudo_object->object_fields[field_name] = value;
+    if (prev != nullptr) {
+      ReleaseJniReference(prev);
+    }
   }
 }
 
@@ -942,6 +997,17 @@ jbyteArray JavaStringGetUtf8Bytes(jobject obj, jstring charset_name) {
   return result;
 }
 
+static inline bool IsRawStringPointer(jstring str) {
+  uintptr_t val = reinterpret_cast<uintptr_t>(str);
+  if (val < 0x10000) {
+    return false;
+  }
+  if (val < 0x10000000ULL && (val & 0xffff) == 0) {
+    return false;
+  }
+  return true;
+}
+
 const char* StringChars(jstring str) {
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   if (!str) {
@@ -950,7 +1016,12 @@ const char* StringChars(jstring str) {
   if (g_known_strings.find(str) != g_known_strings.end()) {
     auto* string_object = static_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-    return string_object ? string_object->modified_utf8.c_str() : "";
+    return string_object && string_object->modified_utf8
+               ? string_object->modified_utf8
+               : "";
+  }
+  if (!IsRawStringPointer(str)) {
+    return "";
   }
   return reinterpret_cast<const char*>(str);
 }
@@ -967,6 +1038,9 @@ const jchar* StringUtf16Chars(jstring str) {
                ? string_object->chars.data()
                : kEmptyUtf16;
   }
+  if (!IsRawStringPointer(str)) {
+    return kEmptyUtf16;
+  }
   return reinterpret_cast<const jchar*>(str);
 }
 
@@ -979,6 +1053,9 @@ jsize StringUtf16Length(jstring str) {
                ? static_cast<jsize>(string_object->chars.size())
                : 0;
   }
+  if (!IsRawStringPointer(str)) {
+    return 0;
+  }
   const char* bytes = reinterpret_cast<const char*>(str);
   return bytes != nullptr ? static_cast<jsize>(std::strlen(bytes)) : 0;
 }
@@ -988,9 +1065,12 @@ jsize StringModifiedUtf8Length(jstring str) {
   if (g_known_strings.find(str) != g_known_strings.end()) {
     auto* string_object = static_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
-    return string_object != nullptr
-               ? static_cast<jsize>(string_object->modified_utf8.size())
+    return string_object != nullptr && string_object->modified_utf8 != nullptr
+               ? static_cast<jsize>(std::strlen(string_object->modified_utf8))
                : 0;
+  }
+  if (!IsRawStringPointer(str)) {
+    return 0;
   }
   const char* bytes = reinterpret_cast<const char*>(str);
   return bytes != nullptr ? static_cast<jsize>(std::strlen(bytes)) : 0;
@@ -3504,6 +3584,7 @@ jbyteArray MakeByteArray(jsize len) {
   jbyteArray ref = reinterpret_cast<jbyteArray>(array.get());
   g_arrays[ref] = array.get();
   g_array_storage[ref] = std::move(array);
+  g_jni_ref_counts[reinterpret_cast<jobject>(ref)] = 1;
   return ref;
 }
 
@@ -3516,6 +3597,7 @@ jfloatArray MakeFloatArray(jsize len) {
   jfloatArray ref = reinterpret_cast<jfloatArray>(array.get());
   g_arrays[ref] = array.get();
   g_array_storage[ref] = std::move(array);
+  g_jni_ref_counts[reinterpret_cast<jobject>(ref)] = 1;
   return ref;
 }
 
@@ -3528,6 +3610,7 @@ jobjectArray MakeObjectArray(jsize len, jobject init) {
   jobjectArray ref = reinterpret_cast<jobjectArray>(array.get());
   g_arrays[ref] = array.get();
   g_array_storage[ref] = std::move(array);
+  g_jni_ref_counts[reinterpret_cast<jobject>(ref)] = 1;
   return ref;
 }
 
@@ -6728,14 +6811,14 @@ void VM::InitJNIFunctionTables() {
          jdouble /*value*/) {};
 
   native_interface_.GetObjectField =
-      [](JNIEnv* /*env*/, jobject obj, jfieldID fieldID) -> jobject {
+      [](JNIEnv* env, jobject obj, jfieldID fieldID) -> jobject {
     auto* name = reinterpret_cast<const char*>(fieldID);
     jobject value = ObjectFieldValue(obj, name);
     if (TraceEnabled()) {
       std::cout << "  [JNI] GetObjectField: "
                 << (name ? name : "unknown") << " -> " << value << '\n';
     }
-    return value;
+    return env != nullptr && value != nullptr ? env->NewLocalRef(value) : value;
   };
   native_interface_.GetBooleanField =
       [](JNIEnv* /*env*/, jobject obj, jfieldID fieldID) -> jboolean {
@@ -6773,11 +6856,7 @@ void VM::InitJNIFunctionTables() {
   native_interface_.SetObjectField =
       [](JNIEnv* /*env*/, jobject obj, jfieldID fieldID,
          jobject val) {
-    auto* name = reinterpret_cast<const char*>(fieldID);
-    auto* pseudo_object = PseudoObjectFromRef(obj);
-    if (pseudo_object && name) {
-      pseudo_object->object_fields[name] = val;
-    }
+    SetObjectFieldRaw(obj, reinterpret_cast<const char*>(fieldID), val);
   };
   native_interface_.SetBooleanField =
       [](JNIEnv* /*env*/, jobject obj, jfieldID fieldID,
@@ -6819,28 +6898,61 @@ void VM::InitJNIFunctionTables() {
 
   native_interface_.NewGlobalRef =
       [](JNIEnv* /*env*/, jobject obj) -> jobject {
+    if (obj != nullptr) {
+      std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
+      auto it = g_jni_ref_counts.find(obj);
+      if (it != g_jni_ref_counts.end()) {
+        ++it->second;
+      } else {
+        g_jni_ref_counts[obj] = 2;
+      }
+    }
     return obj;
   };
 
   native_interface_.DeleteGlobalRef =
-      [](JNIEnv* /*env*/, jobject /*obj*/) {};
+      [](JNIEnv* /*env*/, jobject obj) {
+    ReleaseJniReference(obj);
+  };
 
   native_interface_.NewLocalRef =
       [](JNIEnv* /*env*/, jobject obj) -> jobject {
+    if (obj != nullptr) {
+      std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
+      auto it = g_jni_ref_counts.find(obj);
+      if (it != g_jni_ref_counts.end()) {
+        ++it->second;
+      } else {
+        g_jni_ref_counts[obj] = 2;
+      }
+    }
     return obj;
   };
 
   native_interface_.DeleteLocalRef =
-      [](JNIEnv* /*env*/, jobject /*obj*/) {};
+      [](JNIEnv* /*env*/, jobject obj) {
+    ReleaseJniReference(obj);
+  };
 
   native_interface_.NewWeakGlobalRef =
       [](JNIEnv* /*env*/, jobject obj) -> jweak {
     Trace("NewWeakGlobalRef");
+    if (obj != nullptr) {
+      std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
+      auto it = g_jni_ref_counts.find(obj);
+      if (it != g_jni_ref_counts.end()) {
+        ++it->second;
+      } else {
+        g_jni_ref_counts[obj] = 2;
+      }
+    }
     return reinterpret_cast<jweak>(obj);
   };
 
   native_interface_.DeleteWeakGlobalRef =
-      [](JNIEnv* /*env*/, jweak /*ref*/) {};
+      [](JNIEnv* /*env*/, jweak ref) {
+    ReleaseJniReference(ref);
+  };
 
   native_interface_.GetObjectRefType =
       [](JNIEnv* /*env*/, jobject obj) -> jobjectRefType {
@@ -6899,23 +7011,31 @@ void VM::InitJNIFunctionTables() {
   };
 
   native_interface_.GetObjectArrayElement =
-      [](JNIEnv* /*env*/, jobjectArray array, jsize index) -> jobject {
+      [](JNIEnv* env, jobjectArray array, jsize index) -> jobject {
     PseudoArray* pseudo_array = ArrayFromRef(array);
     if (!pseudo_array || index < 0 ||
         static_cast<std::size_t>(index) >= pseudo_array->objects.size()) {
       return nullptr;
     }
-    return pseudo_array->objects[static_cast<std::size_t>(index)];
+    jobject obj = pseudo_array->objects[static_cast<std::size_t>(index)];
+    return env != nullptr && obj != nullptr ? env->NewLocalRef(obj) : obj;
   };
 
   native_interface_.SetObjectArrayElement =
-      [](JNIEnv* /*env*/, jobjectArray array, jsize index, jobject val) {
+      [](JNIEnv* env, jobjectArray array, jsize index, jobject val) {
     PseudoArray* pseudo_array = ArrayFromRef(array);
     if (!pseudo_array || index < 0 ||
         static_cast<std::size_t>(index) >= pseudo_array->objects.size()) {
       return;
     }
+    if (val != nullptr && env != nullptr) {
+      env->NewLocalRef(val);
+    }
+    jobject prev = pseudo_array->objects[static_cast<std::size_t>(index)];
     pseudo_array->objects[static_cast<std::size_t>(index)] = val;
+    if (prev != nullptr && env != nullptr) {
+      env->DeleteLocalRef(prev);
+    }
   };
 
   native_interface_.NewByteArray =

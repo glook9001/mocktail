@@ -414,11 +414,17 @@ class SdlAudioSink final : public AudioSink {
   }
 
   void EndCall() const {
+    bool notify = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       --active_calls_;
+      if (__builtin_expect(shutting_down_ || switching_device_, 0)) {
+        notify = true;
+      }
     }
-    shutdown_cv_.notify_all();
+    if (notify) {
+      shutdown_cv_.notify_all();
+    }
   }
 
   const PcmSpec source_spec_;
