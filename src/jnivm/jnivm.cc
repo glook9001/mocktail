@@ -320,13 +320,34 @@ void Trace(const char* name) {
   }
 }
 
+struct JniMethodDescriptor {
+  const char* name = nullptr;
+  const char* signature = nullptr;
+};
+
+static std::list<JniMethodDescriptor> g_method_descriptors;
+
 const char* MethodName(jmethodID method_id) {
+  if (__builtin_expect(method_id == nullptr, 0)) {
+    return "unknown";
+  }
+  const auto* desc = reinterpret_cast<const JniMethodDescriptor*>(method_id);
+  if (__builtin_expect(desc->name != nullptr, 1)) {
+    return desc->name;
+  }
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   auto it = g_method_names.find(method_id);
   return it == g_method_names.end() ? "unknown" : it->second;
 }
 
 const char* MethodSignature(jmethodID method_id) {
+  if (__builtin_expect(method_id == nullptr, 0)) {
+    return "";
+  }
+  const auto* desc = reinterpret_cast<const JniMethodDescriptor*>(method_id);
+  if (__builtin_expect(desc->signature != nullptr, 1)) {
+    return desc->signature;
+  }
   std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
   auto it = g_method_signatures.find(method_id);
   return it == g_method_signatures.end() ? "" : it->second;
@@ -348,8 +369,9 @@ jmethodID StoreMethodId(const char* name, const char* sig) {
   g_method_signature_storage.emplace_back(sig ? sig : "");
   const char* stored_name = g_method_name_storage.back().c_str();
   const char* stored_signature = g_method_signature_storage.back().c_str();
+  g_method_descriptors.push_back({stored_name, stored_signature});
   jmethodID method_id =
-      reinterpret_cast<jmethodID>(const_cast<char*>(stored_name));
+      reinterpret_cast<jmethodID>(&g_method_descriptors.back());
   g_method_ids[key] = method_id;
   g_method_names[method_id] = stored_name;
   g_method_signatures[method_id] = stored_signature;
@@ -832,7 +854,7 @@ std::string StringFromJString(jstring str) {
     return {};
   }
   if (g_known_strings.find(str) != g_known_strings.end()) {
-    auto* string_object = dynamic_cast<PseudoStringObject*>(
+    auto* string_object = static_cast<PseudoStringObject*>(
         PseudoObjectFromRef(reinterpret_cast<jobject>(str)));
     return string_object ? string_object->value : std::string();
   }
