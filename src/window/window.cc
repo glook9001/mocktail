@@ -13,6 +13,9 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
 
 #include "mocktail/platform/display_refresh_capabilities.h"
 #include "mocktail/platform/sdl_application_metadata.h"
@@ -178,8 +181,20 @@ bool SdlEventTraceEnabled() {
 }
 
 const char* GetEnvNonEmpty(const char* name) {
-  const char* value = std::getenv(name);
-  return (value != nullptr && value[0] != '\0') ? value : nullptr;
+  if (name == nullptr) {
+    return nullptr;
+  }
+  static std::mutex mutex;
+  static std::unordered_map<const char*, const char*> cache;
+  std::lock_guard<std::mutex> lock(mutex);
+  const auto existing = cache.find(name);
+  if (existing != cache.end()) {
+    return existing->second;
+  }
+  const char* raw = std::getenv(name);
+  const char* value = (raw != nullptr && raw[0] != '\0') ? raw : nullptr;
+  cache.emplace(name, value);
+  return value;
 }
 
 bool IsEnabledEnv(const char* name) {
@@ -1338,7 +1353,26 @@ WindowViewportSnapshot GetWindowViewportSnapshot() {
 }
 
 platform::DisplayRefreshCapabilities GetDisplayRefreshCapabilities() {
-  return g_state.display_refresh;
+  platform::DisplayRefreshCapabilities caps = g_state.display_refresh;
+  if (!UnthrottledPresentationRequested() || !caps.valid()) {
+    return caps;
+  }
+  constexpr float kUnthrottledEngineHz = 240.0f;
+  if (caps.current_hz >= kUnthrottledEngineHz) {
+    return caps;
+  }
+  static bool logged = false;
+  if (!logged) {
+    logged = true;
+    std::fprintf(stderr,
+                 "  [window] advertising %.2f Hz to engine (display %.2f Hz, "
+                 "unthrottled)\n",
+                 static_cast<double>(kUnthrottledEngineHz),
+                 static_cast<double>(caps.current_hz));
+  }
+  caps.supported_hz.push_back(kUnthrottledEngineHz);
+  return platform::NormalizeDisplayRefreshCapabilities(
+      kUnthrottledEngineHz, std::move(caps.supported_hz));
 }
 bool SetPlatformEventObserver(PlatformEventObserver observer, void* context) {
   return g_platform_event_observer.Register(observer, context);
@@ -1946,7 +1980,19 @@ bool PumpEvents() {
   };
 
   SDL_Event event;
-  while (SDL_PollEvent(&event)) {
+  // Pump + PeepEvents drains without SDL_WaitEventTimeoutNS. Unthrottled
+  // ticks only ingest OS events every 4ms so the leader does not contend
+  // with the render thread on wl_display thousands of times per second.
+  constexpr uint64_t kUnthrottledPumpIntervalNs = 4000000ULL;
+  static uint64_t last_os_pump_ns = 0;
+  const uint64_t now_ns = SDL_GetTicksNS();
+  if (!UnthrottledPresentationRequested() || last_os_pump_ns == 0 ||
+      now_ns - last_os_pump_ns >= kUnthrottledPumpIntervalNs) {
+    SDL_PumpEvents();
+    last_os_pump_ns = now_ns;
+  }
+  while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST,
+                        SDL_EVENT_LAST) > 0) {
     if (event.type != SDL_EVENT_MOUSE_MOTION) {
       flush_motion();
     }
@@ -2108,7 +2154,7 @@ bool PumpEvents() {
   MaybePersistWindowState();
   MaybeRecoverVulkanSurface();
   MaybeReportVulkanPresentStall();
-  const char* auto_exit_value =
+  static const char* auto_exit_value =
       GetEnvNonEmpty("MOCKTAIL_AUTO_EXIT_AFTER_PRESENT_MS");
   if (!g_state.quit_requested && auto_exit_value != nullptr) {
     char* end = nullptr;
@@ -2129,18 +2175,35 @@ bool PumpEvents() {
   return !g_state.quit_requested;
 }
 
-void PaceInputPump() {
+bool UnthrottledPresentationRequested() {
+  static const bool unthrottled = [] {
+    const char* vsync = GetEnvNonEmpty("MOCKTAIL_VSYNC");
+    if (vsync != nullptr &&
+        (std::strcmp(vsync, "off") == 0 || std::strcmp(vsync, "0") == 0)) {
+      return true;
+    }
+    const char* frame_rate = GetEnvNonEmpty("MOCKTAIL_FRAME_RATE_LIMIT");
+    return frame_rate != nullptr && std::strcmp(frame_rate, "unlimited") == 0;
+  }();
+  return unthrottled;
+}
+
+uint64_t PaceInputPump() {
   if (!g_state.initialised) {
-    return;
+    return 0;
+  }
+  if (UnthrottledPresentationRequested()) {
+    return 0;
   }
   if (__builtin_expect(SDL_HasEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST), 0)) {
-    return;
+    return 0;
   }
   const uint64_t delay_ns =
       g_input_pump_pacer.DelayBeforeNextPump(SDL_GetTicksNS());
   if (delay_ns != 0) {
     SDL_DelayPrecise(delay_ns);
   }
+  return delay_ns;
 }
 
 void Shutdown() {

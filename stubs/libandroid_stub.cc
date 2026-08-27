@@ -607,6 +607,7 @@ struct ALooper {
   std::unordered_map<int, uint64_t> token_by_fd;
   std::unordered_map<uint64_t, LooperRegistration> registrations_by_token;
   uint64_t next_token = 1;
+  std::vector<epoll_event> epoll_scratch;
 
   // Only the associated thread accesses pending_responses.  Entries are
   // generation-checked before being returned so a concurrent remove/re-add
@@ -881,22 +882,25 @@ int ALooper_pollOnce(int timeout_ms, int* out_fd, int* out_events,
   int wait_timeout = timeout_ms;
 
   for (;;) {
-    std::size_t event_capacity = 1;
+    int max_events = 0;
     {
       std::scoped_lock lock(looper->mutex);
-      event_capacity += looper->registrations_by_token.size();
+      const std::size_t event_capacity =
+          1 + looper->registrations_by_token.size();
+      if (event_capacity >
+          static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        errno = EOVERFLOW;
+        return kPollError;
+      }
+      if (looper->epoll_scratch.size() < event_capacity) {
+        looper->epoll_scratch.resize(event_capacity);
+      }
+      max_events = static_cast<int>(looper->epoll_scratch.size());
     }
-    if (event_capacity >
-        static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-      errno = EOVERFLOW;
-      return kPollError;
-    }
-
-    std::vector<epoll_event> events(event_capacity);
 
     looper->polling.store(true, std::memory_order_release);
-    const int ready = ::epoll_wait(looper->epoll_fd, events.data(),
-                                   static_cast<int>(events.size()),
+    const int ready = ::epoll_wait(looper->epoll_fd,
+                                   looper->epoll_scratch.data(), max_events,
                                    wait_timeout);
     const int wait_errno = errno;
     looper->polling.store(false, std::memory_order_release);
@@ -916,26 +920,36 @@ int ALooper_pollOnce(int timeout_ms, int* out_fd, int* out_events,
     responses.reserve(static_cast<std::size_t>(ready));
 
     for (int i = 0; i < ready; ++i) {
-      const epoll_event& event = events[static_cast<std::size_t>(i)];
-      const uint64_t token = event.data.u64;
-      if (token == kWakeToken) {
-        uint64_t value = 0;
-        ssize_t read_result;
-        do {
-          read_result = ::read(looper->wake_fd, &value, sizeof(value));
-        } while (read_result < 0 && errno == EINTR);
-        had_wake = true;
+      const epoll_event& event =
+          looper->epoll_scratch[static_cast<std::size_t>(i)];
+      if (event.data.u64 != kWakeToken) {
         continue;
       }
+      uint64_t value = 0;
+      ssize_t read_result;
+      do {
+        read_result = ::read(looper->wake_fd, &value, sizeof(value));
+      } while (read_result < 0 && errno == EINTR);
+      had_wake = true;
+    }
 
+    {
       std::scoped_lock lock(looper->mutex);
-      const auto registration_it =
-          looper->registrations_by_token.find(token);
-      if (registration_it == looper->registrations_by_token.end()) {
-        continue;
+      for (int i = 0; i < ready; ++i) {
+        const epoll_event& event =
+            looper->epoll_scratch[static_cast<std::size_t>(i)];
+        const uint64_t token = event.data.u64;
+        if (token == kWakeToken) {
+          continue;
+        }
+        const auto registration_it =
+            looper->registrations_by_token.find(token);
+        if (registration_it == looper->registrations_by_token.end()) {
+          continue;
+        }
+        responses.push_back({registration_it->second,
+                             AndroidEventsFromEpoll(event.events)});
       }
-      responses.push_back({registration_it->second,
-                           AndroidEventsFromEpoll(event.events)});
     }
 
     bool invoked_callback = false;

@@ -1,6 +1,7 @@
 // Android Vulkan loader ABI -> host Vulkan loader + SDL3 WSI.
 
 #include <dlfcn.h>
+#include <time.h>
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
@@ -137,12 +138,19 @@ using WindowDimensionFn = int (*)();
 struct AdapterState {
   struct DeviceDispatch {
     VkDevice device = VK_NULL_HANDLE;
+    VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     PFN_vkQueuePresentKHR queue_present = nullptr;
     PFN_vkQueueSubmit queue_submit = nullptr;
     PFN_vkQueueSubmit2 queue_submit2 = nullptr;
     PFN_vkQueueSubmit2KHR queue_submit2_khr = nullptr;
     PFN_vkQueueBindSparse queue_bind_sparse = nullptr;
     PFN_vkQueueWaitIdle queue_wait_idle = nullptr;
+    PFN_vkAcquireNextImageKHR acquire_next_image = nullptr;
+    PFN_vkAcquireNextImage2KHR acquire_next_image2 = nullptr;
+    PFN_vkWaitForFences wait_for_fences = nullptr;
+    PFN_vkWaitSemaphores wait_semaphores = nullptr;
+    PFN_vkWaitSemaphoresKHR wait_semaphores_khr = nullptr;
+    PFN_vkDeviceWaitIdle device_wait_idle = nullptr;
     PFN_vkResetFences reset_fences = nullptr;
     PFN_vkResetCommandPool reset_command_pool = nullptr;
     PFN_vkGetQueryPoolResults get_query_pool_results = nullptr;
@@ -429,12 +437,14 @@ const AdapterState::DeviceDispatch& HostDispatchForCommandBuffer(
 }
 
 void RegisterHostDeviceDispatch(VkDevice device,
+                                VkPhysicalDevice physical_device,
                                 PFN_vkGetDeviceProcAddr get_device_proc_addr) {
   if (device == VK_NULL_HANDLE || get_device_proc_addr == nullptr) {
     return;
   }
   AdapterState::DeviceDispatch dispatch;
   dispatch.device = device;
+  dispatch.physical_device = physical_device;
   dispatch.queue_present = reinterpret_cast<PFN_vkQueuePresentKHR>(
       get_device_proc_addr(device, "vkQueuePresentKHR"));
   dispatch.queue_submit = reinterpret_cast<PFN_vkQueueSubmit>(
@@ -447,6 +457,18 @@ void RegisterHostDeviceDispatch(VkDevice device,
       get_device_proc_addr(device, "vkQueueBindSparse"));
   dispatch.queue_wait_idle = reinterpret_cast<PFN_vkQueueWaitIdle>(
       get_device_proc_addr(device, "vkQueueWaitIdle"));
+  dispatch.acquire_next_image = reinterpret_cast<PFN_vkAcquireNextImageKHR>(
+      get_device_proc_addr(device, "vkAcquireNextImageKHR"));
+  dispatch.acquire_next_image2 = reinterpret_cast<PFN_vkAcquireNextImage2KHR>(
+      get_device_proc_addr(device, "vkAcquireNextImage2KHR"));
+  dispatch.wait_for_fences = reinterpret_cast<PFN_vkWaitForFences>(
+      get_device_proc_addr(device, "vkWaitForFences"));
+  dispatch.wait_semaphores = reinterpret_cast<PFN_vkWaitSemaphores>(
+      get_device_proc_addr(device, "vkWaitSemaphores"));
+  dispatch.wait_semaphores_khr = reinterpret_cast<PFN_vkWaitSemaphoresKHR>(
+      get_device_proc_addr(device, "vkWaitSemaphoresKHR"));
+  dispatch.device_wait_idle = reinterpret_cast<PFN_vkDeviceWaitIdle>(
+      get_device_proc_addr(device, "vkDeviceWaitIdle"));
   dispatch.reset_fences = reinterpret_cast<PFN_vkResetFences>(
       get_device_proc_addr(device, "vkResetFences"));
   dispatch.reset_command_pool = reinterpret_cast<PFN_vkResetCommandPool>(
@@ -894,6 +916,17 @@ class VulkanCallObservation final {
   VkResult result_ = VK_ERROR_UNKNOWN;
 };
 
+mocktail::graphics::PresentModePolicy CachedPresentPolicy() {
+  static const mocktail::graphics::PresentModePolicy policy = [] {
+    const char* vsync = std::getenv("MOCKTAIL_VSYNC");
+    const char* frame_rate = std::getenv("MOCKTAIL_FRAME_RATE_LIMIT");
+    return mocktail::graphics::ResolvePresentModePolicy(
+        vsync != nullptr ? vsync : "auto",
+        frame_rate != nullptr ? frame_rate : "display");
+  }();
+  return policy;
+}
+
 VkResult WaitForSemaphoresObserved(const char* call_name,
                                    PFN_vkWaitSemaphores host_wait,
                                    VkDevice device,
@@ -906,14 +939,18 @@ VkResult WaitForSemaphoresObserved(const char* call_name,
     }
     return VK_ERROR_INITIALIZATION_FAILED;
   }
+  const bool unthrottled =
+      CachedPresentPolicy() ==
+      mocktail::graphics::PresentModePolicy::kUnthrottled;
   const std::uint64_t host_timeout =
-      mocktail::graphics::BoundHostSynchronizationWaitTimeout(timeout);
+      mocktail::graphics::BoundHostSynchronizationWaitTimeout(timeout,
+                                                             unthrottled);
   std::uint64_t timeout_slices = 0;
   VkResult result = VK_SUCCESS;
   do {
     result = host_wait(device, wait_info, host_timeout);
-    if (!mocktail::graphics::ShouldContinueHostSynchronizationWait(timeout,
-                                                                   result)) {
+    if (!mocktail::graphics::ShouldContinueHostSynchronizationWait(
+            timeout, result, unthrottled)) {
       break;
     }
     ++timeout_slices;
@@ -933,6 +970,23 @@ VkResult WaitForSemaphoresObserved(const char* call_name,
   return result;
 }
 
+bool FpsTraceEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("MOCKTAIL_TRACE_FPS");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+  }();
+  return enabled;
+}
+
+std::uint64_t MonotonicNanos() {
+  timespec ts{};
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    return 0;
+  }
+  return static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ULL +
+         static_cast<std::uint64_t>(ts.tv_nsec);
+}
+
 VkResult VKAPI_CALL
 ObservedHostQueuePresent(VkQueue queue, const VkPresentInfoKHR* present_info) {
   AdapterState& state = State();
@@ -946,7 +1000,47 @@ ObservedHostQueuePresent(VkQueue queue, const VkPresentInfoKHR* present_info) {
   if (note_begin != nullptr) {
     note_begin();
   }
+  const bool fps_trace = FpsTraceEnabled();
+  const std::uint64_t present_start_ns = fps_trace ? MonotonicNanos() : 0;
   const VkResult result = host_present(queue, present_info);
+  if (fps_trace) {
+    const std::uint64_t present_ns = MonotonicNanos() - present_start_ns;
+    static std::atomic<std::uint64_t> present_samples{0};
+    static std::atomic<std::uint64_t> present_total_ns{0};
+    static std::atomic<std::uint64_t> present_max_ns{0};
+    static std::atomic<std::uint64_t> window_start_ns{0};
+    present_total_ns.fetch_add(present_ns, std::memory_order_relaxed);
+    std::uint64_t max_ns = present_max_ns.load(std::memory_order_relaxed);
+    while (present_ns > max_ns &&
+           !present_max_ns.compare_exchange_weak(max_ns, present_ns,
+                                                 std::memory_order_relaxed)) {
+    }
+    const std::uint64_t samples =
+        present_samples.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::uint64_t start_ns = window_start_ns.load(std::memory_order_relaxed);
+    if (start_ns == 0) {
+      window_start_ns.compare_exchange_strong(start_ns, present_start_ns,
+                                              std::memory_order_relaxed);
+      start_ns = window_start_ns.load(std::memory_order_relaxed);
+    }
+    if (present_start_ns - start_ns >= 1000000000ULL && samples != 0) {
+      const std::uint64_t total =
+          present_total_ns.exchange(0, std::memory_order_relaxed);
+      const std::uint64_t max_wait =
+          present_max_ns.exchange(0, std::memory_order_relaxed);
+      const std::uint64_t n =
+          present_samples.exchange(0, std::memory_order_relaxed);
+      window_start_ns.store(present_start_ns, std::memory_order_relaxed);
+      if (n != 0) {
+        std::fprintf(stderr,
+                     "  [fps] vkQueuePresentKHR n=%llu avg=%llu us max=%llu "
+                     "us\n",
+                     static_cast<unsigned long long>(n),
+                     static_cast<unsigned long long>(total / n / 1000ULL),
+                     static_cast<unsigned long long>(max_wait / 1000ULL));
+      }
+    }
+  }
   const NoteHostPresentEndFn note_end =
       state.note_host_present_end.load(std::memory_order_acquire);
   if (note_end != nullptr) {
@@ -1257,7 +1351,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(
   if (result != VK_SUCCESS) {
     return result;
   }
-  RegisterHostDeviceDispatch(*device, host_get_device_proc_addr);
+  RegisterHostDeviceDispatch(*device, physical_device,
+                             host_get_device_proc_addr);
 
   std::uint32_t queue_family_count = 0;
   const auto host_get_queue_families =
@@ -1362,8 +1457,41 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
       swapchain == nullptr) {
     return VK_ERROR_INITIALIZATION_FAILED;
   }
+  VkSwapchainCreateInfoKHR host_info = *create_info;
+  const mocktail::graphics::PresentModePolicy present_policy =
+      CachedPresentPolicy();
+  if (present_policy == mocktail::graphics::PresentModePolicy::kUnthrottled) {
+    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR host_caps = nullptr;
+    {
+      AdapterState& state = State();
+      std::lock_guard<std::mutex> lock(state.mutex);
+      host_caps = state.host_surface_capabilities;
+    }
+    const VkPhysicalDevice physical_device =
+        HostDispatchForDevice(device).physical_device;
+    VkSurfaceCapabilitiesKHR capabilities{};
+    if (host_caps != nullptr && physical_device != VK_NULL_HANDLE &&
+        host_caps(physical_device, create_info->surface, &capabilities) ==
+            VK_SUCCESS) {
+      const std::uint32_t preferred =
+          mocktail::graphics::PreferSwapchainMinImageCount(
+              present_policy, create_info->minImageCount,
+              capabilities.minImageCount, capabilities.maxImageCount);
+      if (preferred != host_info.minImageCount) {
+        host_info.minImageCount = preferred;
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true, std::memory_order_relaxed)) {
+          std::fprintf(stderr,
+                       "  [vulkan] unthrottled swapchain minImageCount=%u "
+                       "(requested=%u max=%u)\n",
+                       preferred, create_info->minImageCount,
+                       capabilities.maxImageCount);
+        }
+      }
+    }
+  }
   const VkResult result =
-      host_create(device, create_info, allocator, swapchain);
+      host_create(device, &host_info, allocator, swapchain);
   if (result != VK_SUCCESS) {
     return result;
   }
@@ -1402,21 +1530,31 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(
     VkDevice device, VkSwapchainKHR swapchain, std::uint64_t timeout,
     VkSemaphore semaphore, VkFence fence, std::uint32_t* image_index) {
   VulkanCallObservation observation("vkAcquireNextImageKHR");
-  const auto host_acquire = reinterpret_cast<PFN_vkAcquireNextImageKHR>(
-      HostDeviceProc(device, "vkAcquireNextImageKHR"));
+  const PFN_vkAcquireNextImageKHR host_acquire =
+      HostDispatchForDevice(device).acquire_next_image;
   if (host_acquire == nullptr) {
     observation.SetResult(VK_ERROR_INITIALIZATION_FAILED);
     return VK_ERROR_INITIALIZATION_FAILED;
   }
+  const bool unthrottled =
+      CachedPresentPolicy() ==
+      mocktail::graphics::PresentModePolicy::kUnthrottled;
   const std::uint64_t host_timeout =
-      mocktail::graphics::BoundHostImageAcquireTimeout(timeout);
-  const VkResult host_result = host_acquire(device, swapchain, host_timeout,
-                                            semaphore, fence, image_index);
+      mocktail::graphics::BoundHostImageAcquireTimeout(timeout, unthrottled);
+  VkResult host_result = host_acquire(device, swapchain, host_timeout,
+                                      semaphore, fence, image_index);
+  if (host_result == VK_NOT_READY &&
+      timeout == std::numeric_limits<std::uint64_t>::max()) {
+    host_result = host_acquire(device, swapchain,
+                               std::numeric_limits<std::uint64_t>::max(),
+                               semaphore, fence, image_index);
+  }
   const bool watchdog_timeout =
-      mocktail::graphics::IsHostImageAcquireWatchdogTimeout(timeout,
-                                                            host_result);
+      mocktail::graphics::IsHostImageAcquireWatchdogTimeout(
+          timeout, host_result, unthrottled);
   const VkResult result =
-      mocktail::graphics::NormalizeHostImageAcquireResult(timeout, host_result);
+      mocktail::graphics::NormalizeHostImageAcquireResult(
+          timeout, host_result, unthrottled);
   if (watchdog_timeout) {
     static std::atomic<std::uint64_t> watchdog_timeout_count{0};
     const std::uint64_t count =
@@ -1441,22 +1579,31 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(
     VkDevice device, const VkAcquireNextImageInfoKHR* acquire_info,
     std::uint32_t* image_index) {
   VulkanCallObservation observation("vkAcquireNextImage2KHR");
-  const auto host_acquire = reinterpret_cast<PFN_vkAcquireNextImage2KHR>(
-      HostDeviceProc(device, "vkAcquireNextImage2KHR"));
+  const PFN_vkAcquireNextImage2KHR host_acquire =
+      HostDispatchForDevice(device).acquire_next_image2;
   if (host_acquire == nullptr || acquire_info == nullptr) {
     observation.SetResult(VK_ERROR_INITIALIZATION_FAILED);
     return VK_ERROR_INITIALIZATION_FAILED;
   }
+  const bool unthrottled =
+      CachedPresentPolicy() ==
+      mocktail::graphics::PresentModePolicy::kUnthrottled;
   VkAcquireNextImageInfoKHR host_info = *acquire_info;
-  host_info.timeout =
-      mocktail::graphics::BoundHostImageAcquireTimeout(acquire_info->timeout);
-  const VkResult host_result = host_acquire(device, &host_info, image_index);
+  host_info.timeout = mocktail::graphics::BoundHostImageAcquireTimeout(
+      acquire_info->timeout, unthrottled);
+  VkResult host_result = host_acquire(device, &host_info, image_index);
+  if (host_result == VK_NOT_READY &&
+      acquire_info->timeout == std::numeric_limits<std::uint64_t>::max()) {
+    VkAcquireNextImageInfoKHR blocking_info = host_info;
+    blocking_info.timeout = std::numeric_limits<std::uint64_t>::max();
+    host_result = host_acquire(device, &blocking_info, image_index);
+  }
   const bool watchdog_timeout =
       mocktail::graphics::IsHostImageAcquireWatchdogTimeout(
-          acquire_info->timeout, host_result);
+          acquire_info->timeout, host_result, unthrottled);
   const VkResult result =
       mocktail::graphics::NormalizeHostImageAcquireResult(
-          acquire_info->timeout, host_result);
+          acquire_info->timeout, host_result, unthrottled);
   if (watchdog_timeout) {
     static std::atomic<std::uint64_t> watchdog_timeout_count{0};
     const std::uint64_t count =
@@ -1481,20 +1628,24 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitForFences(
     VkDevice device, std::uint32_t fence_count, const VkFence* fences,
     VkBool32 wait_all, std::uint64_t timeout) {
   VulkanCallObservation observation("vkWaitForFences");
-  const auto host_wait = reinterpret_cast<PFN_vkWaitForFences>(
-      HostDeviceProc(device, "vkWaitForFences"));
+  const PFN_vkWaitForFences host_wait =
+      HostDispatchForDevice(device).wait_for_fences;
   if (host_wait == nullptr) {
     observation.SetResult(VK_ERROR_INITIALIZATION_FAILED);
     return VK_ERROR_INITIALIZATION_FAILED;
   }
+  const bool unthrottled =
+      CachedPresentPolicy() ==
+      mocktail::graphics::PresentModePolicy::kUnthrottled;
   const std::uint64_t host_timeout =
-      mocktail::graphics::BoundHostSynchronizationWaitTimeout(timeout);
+      mocktail::graphics::BoundHostSynchronizationWaitTimeout(timeout,
+                                                             unthrottled);
   std::uint64_t timeout_slices = 0;
   VkResult result = VK_SUCCESS;
   do {
     result = host_wait(device, fence_count, fences, wait_all, host_timeout);
-    if (!mocktail::graphics::ShouldContinueHostSynchronizationWait(timeout,
-                                                                   result)) {
+    if (!mocktail::graphics::ShouldContinueHostSynchronizationWait(
+            timeout, result, unthrottled)) {
       break;
     }
     ++timeout_slices;
@@ -1660,8 +1811,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(
     VkDevice device, const VkSemaphoreWaitInfo* wait_info,
     std::uint64_t timeout) {
   VulkanCallObservation observation("vkWaitSemaphores");
-  const auto host_wait = reinterpret_cast<PFN_vkWaitSemaphores>(
-      HostDeviceProc(device, "vkWaitSemaphores"));
+  const PFN_vkWaitSemaphores host_wait =
+      HostDispatchForDevice(device).wait_semaphores;
   return WaitForSemaphoresObserved("vkWaitSemaphores", host_wait, device,
                                    wait_info, timeout, &observation);
 }
@@ -1670,8 +1821,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphoresKHR(
     VkDevice device, const VkSemaphoreWaitInfo* wait_info,
     std::uint64_t timeout) {
   VulkanCallObservation observation("vkWaitSemaphoresKHR");
-  const auto host_wait = reinterpret_cast<PFN_vkWaitSemaphoresKHR>(
-      HostDeviceProc(device, "vkWaitSemaphoresKHR"));
+  const PFN_vkWaitSemaphoresKHR host_wait =
+      HostDispatchForDevice(device).wait_semaphores_khr;
   return WaitForSemaphoresObserved(
       "vkWaitSemaphoresKHR", reinterpret_cast<PFN_vkWaitSemaphores>(host_wait),
       device, wait_info, timeout, &observation);
@@ -1758,8 +1909,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueWaitIdle(VkQueue queue) {
 
 VKAPI_ATTR VkResult VKAPI_CALL vkDeviceWaitIdle(VkDevice device) {
   VulkanCallObservation observation("vkDeviceWaitIdle");
-  const auto host_wait = reinterpret_cast<PFN_vkDeviceWaitIdle>(
-      HostDeviceProc(device, "vkDeviceWaitIdle"));
+  const PFN_vkDeviceWaitIdle host_wait =
+      HostDispatchForDevice(device).device_wait_idle;
   if (host_wait == nullptr) {
     observation.SetResult(VK_ERROR_INITIALIZATION_FAILED);
     return VK_ERROR_INITIALIZATION_FAILED;
@@ -1845,12 +1996,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfacePresentModesKHR(
     }
     host_modes.resize(host_count);
   }
-  const char* vsync = std::getenv("MOCKTAIL_VSYNC");
-  const char* frame_rate = std::getenv("MOCKTAIL_FRAME_RATE_LIMIT");
-  const mocktail::graphics::PresentModePolicy policy =
-      mocktail::graphics::ResolvePresentModePolicy(
-          vsync != nullptr ? vsync : "auto",
-          frame_rate != nullptr ? frame_rate : "display");
+  const mocktail::graphics::PresentModePolicy policy = CachedPresentPolicy();
   const std::vector<VkPresentModeKHR> visible =
       mocktail::graphics::FilterPresentModes(policy, host_modes);
   {

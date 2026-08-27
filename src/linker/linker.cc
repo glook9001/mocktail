@@ -7,6 +7,7 @@
 #include "compat/bionic_host_libc_runtime.h"
 #include "compat/bionic_large_file_runtime.h"
 #include "compat/bionic_pthread_key_runtime.h"
+#include "compat/bionic_abi_exports.h"
 #include "compat/bionic_rwlock_runtime.h"
 #include "compat/bionic_semaphore_runtime.h"
 #include "compat/bionic_signal_runtime.h"
@@ -314,6 +315,30 @@ void RegisterBionicPthreadKeyRuntimeForLibc() {
   RegisterSyntheticSymbol(
       "libc.so", "pthread_rwlock_unlock",
       reinterpret_cast<void*>(mocktail_bionic_pthread_rwlock_unlock));
+  RegisterSyntheticSymbol("libc.so", "pthread_once",
+                          reinterpret_cast<void*>(mocktail_pthread_once));
+  RegisterSyntheticSymbol("libc.so", "pthread_spin_init",
+                          reinterpret_cast<void*>(mocktail_pthread_spin_init));
+  RegisterSyntheticSymbol(
+      "libc.so", "pthread_spin_destroy",
+      reinterpret_cast<void*>(mocktail_pthread_spin_destroy));
+  RegisterSyntheticSymbol("libc.so", "pthread_spin_lock",
+                          reinterpret_cast<void*>(mocktail_pthread_spin_lock));
+  RegisterSyntheticSymbol(
+      "libc.so", "pthread_spin_trylock",
+      reinterpret_cast<void*>(mocktail_pthread_spin_trylock));
+  RegisterSyntheticSymbol(
+      "libc.so", "pthread_spin_unlock",
+      reinterpret_cast<void*>(mocktail_pthread_spin_unlock));
+  RegisterSyntheticSymbol(
+      "libc.so", "pthread_barrier_init",
+      reinterpret_cast<void*>(mocktail_pthread_barrier_init));
+  RegisterSyntheticSymbol(
+      "libc.so", "pthread_barrier_destroy",
+      reinterpret_cast<void*>(mocktail_pthread_barrier_destroy));
+  RegisterSyntheticSymbol(
+      "libc.so", "pthread_barrier_wait",
+      reinterpret_cast<void*>(mocktail_pthread_barrier_wait));
 }
 
 void RegisterBionicAtForkRuntimeForLibc() {

@@ -14,6 +14,7 @@
 #include <mutex>
 #include <new>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -709,11 +710,10 @@ jobject SingletonObject(const std::string& class_name) {
   return object;
 }
 
-std::string ObjectClassName(jobject obj) {
-  std::lock_guard<std::recursive_mutex> lock(g_jni_state_mutex);
+std::string_view ObjectClassName(jobject obj) {
   PseudoJavaObject* pseudo_object = PseudoObjectFromRef(obj);
   if (!pseudo_object || !pseudo_object->GetClass()) {
-    return "";
+    return {};
   }
   return pseudo_object->GetClass()->GetName();
 }
@@ -1819,9 +1819,9 @@ void HandleVoidMethod(jobject obj, jmethodID method_id, va_list args) {
   if (HandleAndroidSetWindowFlagsMethodV(obj, method_id, args)) {
     return;
   }
+  const std::string_view class_name = ObjectClassName(obj);
   if (std::strcmp(name, "run") == 0 &&
-      ObjectClassName(obj) ==
-          "com/roblox/universalapp/messagebus/RawCallback") {
+      class_name == "com/roblox/universalapp/messagebus/RawCallback") {
     jstring message = va_arg(args, jstring);
     VM *vm = CurrentVM();
     if (vm != nullptr) {
@@ -1830,7 +1830,7 @@ void HandleVoidMethod(jobject obj, jmethodID method_id, va_list args) {
     return;
   }
   if (std::strcmp(name, "a") == 0) {
-    if (ObjectClassName(obj) !=
+    if (class_name !=
         "com/roblox/engine/jni/OnAppBridgeNotificationListener") {
       return;
     }
@@ -1842,13 +1842,13 @@ void HandleVoidMethod(jobject obj, jmethodID method_id, va_list args) {
   if (std::strcmp(name, "f") == 0 &&
       std::strcmp(MethodSignature(method_id),
                   "(Ljava/lang/String;Ljava/lang/String;)V") == 0 &&
-      ObjectClassName(obj) == "com/roblox/engine/jni/EngineJavaCallback2") {
+      class_name == "com/roblox/engine/jni/EngineJavaCallback2") {
     auto type = va_arg(args, jstring);
     auto data = va_arg(args, jstring);
     RecordDataModelNotification(obj, type, data);
     return;
   }
-  if (ObjectClassName(obj) == "com/roblox/engine/jni/EngineJavaCallback2" &&
+  if (class_name == "com/roblox/engine/jni/EngineJavaCallback2" &&
       std::strlen(name) == 1 && name[0] >= 'b' && name[0] <= 'o') {
     return;
   }
@@ -4077,7 +4077,7 @@ bool HandleRobloxOpenWebActivityMethodA(jobject obj, jmethodID method_id,
 bool IsAndroidSetWindowFlagsMethod(jobject obj, jmethodID method_id) {
   const char* name = MethodName(method_id);
   const char* signature = MethodSignature(method_id);
-  const std::string class_name = ObjectClassName(obj);
+  const std::string_view class_name = ObjectClassName(obj);
   return obj != nullptr && name != nullptr && signature != nullptr &&
          (class_name == "android/app/Activity" ||
           class_name == "com/roblox/client/RobloxActivity" ||
@@ -4128,9 +4128,9 @@ void HandleVoidMethodA(jobject obj, jmethodID method_id, const jvalue *args) {
   if (!args) {
     return;
   }
+  const std::string_view class_name = ObjectClassName(obj);
   if (std::strcmp(name, "run") == 0 &&
-      ObjectClassName(obj) ==
-          "com/roblox/universalapp/messagebus/RawCallback") {
+      class_name == "com/roblox/universalapp/messagebus/RawCallback") {
     VM *vm = CurrentVM();
     if (vm != nullptr) {
       vm->DispatchMessageBusRawCallback(obj, vm->GetJNIEnv(),
@@ -4139,7 +4139,7 @@ void HandleVoidMethodA(jobject obj, jmethodID method_id, const jvalue *args) {
     return;
   }
   if (std::strcmp(name, "a") == 0) {
-    if (ObjectClassName(obj) !=
+    if (class_name !=
         "com/roblox/engine/jni/OnAppBridgeNotificationListener") {
       return;
     }
@@ -4150,12 +4150,12 @@ void HandleVoidMethodA(jobject obj, jmethodID method_id, const jvalue *args) {
   if (std::strcmp(name, "f") == 0 &&
       std::strcmp(MethodSignature(method_id),
                   "(Ljava/lang/String;Ljava/lang/String;)V") == 0 &&
-      ObjectClassName(obj) == "com/roblox/engine/jni/EngineJavaCallback2") {
+      class_name == "com/roblox/engine/jni/EngineJavaCallback2") {
     RecordDataModelNotification(obj, static_cast<jstring>(args[0].l),
                                 static_cast<jstring>(args[1].l));
     return;
   }
-  if (ObjectClassName(obj) == "com/roblox/engine/jni/EngineJavaCallback2" &&
+  if (class_name == "com/roblox/engine/jni/EngineJavaCallback2" &&
       std::strlen(name) == 1 && name[0] >= 'a' && name[0] <= 'o') {
     return;
   }

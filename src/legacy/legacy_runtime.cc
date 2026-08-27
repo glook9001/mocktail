@@ -9,14 +9,15 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <link.h>
-#include <malloc.h>
 #include <iomanip>
 #include <iostream>
 #include <csignal>
 #include <netdb.h>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <poll.h>
+#include <unordered_map>
 #include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -2614,13 +2615,32 @@ bool IsLegacyBinaryCompatibilityToggle(const char* name) {
   return false;
 }
 
+const char* CachedGetenv(const char* name) {
+  if (name == nullptr) {
+    return nullptr;
+  }
+  // Launch flags are string literals and do not change after startup. Cache by
+  // pointer identity so the main-thread pump does not walk environ + allocate
+  // on every tick.
+  static std::mutex mutex;
+  static std::unordered_map<const char*, const char*> cache;
+  std::lock_guard<std::mutex> lock(mutex);
+  const auto existing = cache.find(name);
+  if (existing != cache.end()) {
+    return existing->second;
+  }
+  const char* value = std::getenv(name);
+  cache.emplace(name, value);
+  return value;
+}
+
 bool IsEnabled(const char* name) {
   if (!g_allow_legacy_binary_patches.load(std::memory_order_acquire) &&
       IsLegacyBinaryCompatibilityToggle(name)) {
     return false;
   }
-  const char* value = std::getenv(name);
-  return value != nullptr && value[0] != '\0' && std::string(value) != "0";
+  const char* value = CachedGetenv(name);
+  return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
 bool IsDisabled(const char* name) {
@@ -2628,8 +2648,8 @@ bool IsDisabled(const char* name) {
       IsLegacyBinaryCompatibilityToggle(name)) {
     return true;
   }
-  const char* value = std::getenv(name);
-  return value != nullptr && std::string(value) == "0";
+  const char* value = CachedGetenv(name);
+  return value != nullptr && std::strcmp(value, "0") == 0;
 }
 
 bool StartsWith(const char* value, const char* prefix) {
@@ -2924,7 +2944,7 @@ bool ShouldRunStartupStep(const char* step_env, bool default_value) {
 }
 
 int GetEnvInt(const char* name, int default_value) {
-  const char* value = std::getenv(name);
+  const char* value = CachedGetenv(name);
   if (value == nullptr || value[0] == '\0') {
     return default_value;
   }
@@ -2937,7 +2957,7 @@ int GetEnvInt(const char* name, int default_value) {
 }
 
 uintptr_t GetEnvAddress(const char* name, uintptr_t default_value) {
-  const char* value = std::getenv(name);
+  const char* value = CachedGetenv(name);
   if (value == nullptr || value[0] == '\0') {
     return default_value;
   }
@@ -2950,7 +2970,7 @@ uintptr_t GetEnvAddress(const char* name, uintptr_t default_value) {
 }
 
 jlong GetEnvLong(const char* name, jlong default_value) {
-  const char* value = std::getenv(name);
+  const char* value = CachedGetenv(name);
   if (value == nullptr || value[0] == '\0') {
     return default_value;
   }
@@ -2969,6 +2989,15 @@ uint64_t MonotonicMillis() {
   }
   return static_cast<uint64_t>(ts.tv_sec) * 1000ULL +
          static_cast<uint64_t>(ts.tv_nsec) / 1000000ULL;
+}
+
+uint64_t MonotonicNanos() {
+  timespec ts{};
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    return 0;
+  }
+  return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+         static_cast<uint64_t>(ts.tv_nsec);
 }
 
 JNIEnv* AttachMainThreadJniEnv() {
@@ -3139,10 +3168,17 @@ void MocktailTrimEngineMemory(int level) {
 }
 
 void PumpRobloxMainThreadMessagesOnce() {
-  if (g_main_thread_message_pump_ready.load() == 0 &&
-      !IsEnabled("MOCKTAIL_FORCE_EARLY_MAIN_THREAD_MESSAGE_PUMP")) {
+  static const bool force_early =
+      IsEnabled("MOCKTAIL_FORCE_EARLY_MAIN_THREAD_MESSAGE_PUMP");
+  static const bool pump_disabled =
+      IsDisabled("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP");
+  static const bool trace_pump =
+      IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP");
+  static const int pump_limit =
+      GetEnvInt("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP_LIMIT", 0);
+  if (g_main_thread_message_pump_ready.load() == 0 && !force_early) {
     static bool logged_not_ready = false;
-    if (!logged_not_ready && IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
+    if (!logged_not_ready && trace_pump) {
       logged_not_ready = true;
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump not ready\n"
                 << std::flush;
@@ -3152,10 +3188,9 @@ void PumpRobloxMainThreadMessagesOnce() {
 
   if (g_native_call_messages_from_main_thread == nullptr ||
       g_vm_for_main_thread_pump == nullptr ||
-      g_native_gl_class_for_main_thread == nullptr ||
-      IsDisabled("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP")) {
+      g_native_gl_class_for_main_thread == nullptr || pump_disabled) {
     static bool logged_unavailable = false;
-    if (!logged_unavailable && IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
+    if (!logged_unavailable && trace_pump) {
       logged_unavailable = true;
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump unavailable"
                 << " fn="
@@ -3165,9 +3200,7 @@ void PumpRobloxMainThreadMessagesOnce() {
                 << " class="
                 << reinterpret_cast<const void*>(
                        g_native_gl_class_for_main_thread)
-                << " disabled="
-                << IsDisabled("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP")
-                << '\n'
+                << " disabled=" << pump_disabled << '\n'
                 << std::flush;
     }
     return;
@@ -3176,7 +3209,7 @@ void PumpRobloxMainThreadMessagesOnce() {
   JNIEnv* env = AttachMainThreadJniEnv();
   if (env == nullptr) {
     static bool logged_missing_env = false;
-    if (!logged_missing_env && IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
+    if (!logged_missing_env && trace_pump) {
       logged_missing_env = true;
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump has no JNIEnv\n"
                 << std::flush;
@@ -3185,24 +3218,23 @@ void PumpRobloxMainThreadMessagesOnce() {
   }
   static int pump_count = 0;
   ++pump_count;
-  int pump_limit = GetEnvInt("MOCKTAIL_MAIN_THREAD_MESSAGE_PUMP_LIMIT", 0);
   if (pump_limit > 0 && pump_count > pump_limit) {
     return;
   }
-  if (IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
+  if (trace_pump) {
     if (pump_count <= 10 || pump_count % 100 == 0) {
       std::cerr << "  [main] nativeCallMessagesFromMainThread pump #"
                 << pump_count << " env=" << static_cast<void*>(env) << '\n'
                 << std::flush;
     }
   }
-  if (sigsetjmp(g_call_messages_from_main_thread_jmp_buf, 1) == 0) {
+  if (sigsetjmp(g_call_messages_from_main_thread_jmp_buf, 0) == 0) {
     g_call_messages_from_main_thread_recovery_in_progress = 1;
     g_stage6_empty_gl_helper_returns = 0;
     g_native_call_messages_from_main_thread(
         env, g_native_gl_class_for_main_thread);
     g_call_messages_from_main_thread_recovery_in_progress = 0;
-    if (IsEnabled("MOCKTAIL_TRACE_MAIN_THREAD_PUMP")) {
+    if (trace_pump) {
       if (pump_count <= 10 || pump_count % 100 == 0) {
         std::cerr << "  [main] nativeCallMessagesFromMainThread returned #"
                   << pump_count << '\n'
@@ -3214,18 +3246,6 @@ void PumpRobloxMainThreadMessagesOnce() {
     std::cerr << "  [main] nativeCallMessagesFromMainThread recovered\n"
               << std::flush;
   }
-#if defined(__GLIBC__)
-  static auto last_trim_time = std::chrono::steady_clock::now();
-  if (pump_count % 180 == 0) {
-    const auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_trim_time)
-            .count() >= 5) {
-      last_trim_time = now;
-      malloc_trim(0);
-      MocktailTrimEngineMemory(15 /* TRIM_MEMORY_RUNNING_CRITICAL */);
-    }
-  }
-#endif
 }
 
 void PumpStartupOwnerThread(void* /*context*/) {
@@ -3234,7 +3254,7 @@ void PumpStartupOwnerThread(void* /*context*/) {
 }
 
 std::string GetEnvString(const char* name, const char* default_value) {
-  const char* value = std::getenv(name);
+  const char* value = CachedGetenv(name);
   if (value == nullptr || value[0] == '\0') {
     return default_value ? default_value : "";
   }
@@ -3242,7 +3262,7 @@ std::string GetEnvString(const char* name, const char* default_value) {
 }
 
 bool HasEnvValue(const char* name) {
-  const char* value = std::getenv(name);
+  const char* value = CachedGetenv(name);
   return value != nullptr && value[0] != '\0';
 }
 
@@ -32963,6 +32983,25 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
                          reinterpret_cast<void*>(mocktail_pthread_mutex_trylock));
   linker::RegisterSymbol("pthread_mutex_unlock",
                          reinterpret_cast<void*>(mocktail_pthread_mutex_unlock));
+  linker::RegisterSymbol("pthread_once",
+                         reinterpret_cast<void*>(mocktail_pthread_once));
+  linker::RegisterSymbol("pthread_spin_init",
+                         reinterpret_cast<void*>(mocktail_pthread_spin_init));
+  linker::RegisterSymbol("pthread_spin_destroy",
+                         reinterpret_cast<void*>(mocktail_pthread_spin_destroy));
+  linker::RegisterSymbol("pthread_spin_lock",
+                         reinterpret_cast<void*>(mocktail_pthread_spin_lock));
+  linker::RegisterSymbol("pthread_spin_trylock",
+                         reinterpret_cast<void*>(mocktail_pthread_spin_trylock));
+  linker::RegisterSymbol("pthread_spin_unlock",
+                         reinterpret_cast<void*>(mocktail_pthread_spin_unlock));
+  linker::RegisterSymbol("pthread_barrier_init",
+                         reinterpret_cast<void*>(mocktail_pthread_barrier_init));
+  linker::RegisterSymbol(
+      "pthread_barrier_destroy",
+      reinterpret_cast<void*>(mocktail_pthread_barrier_destroy));
+  linker::RegisterSymbol("pthread_barrier_wait",
+                         reinterpret_cast<void*>(mocktail_pthread_barrier_wait));
   linker::RegisterSymbol(
       "pthread_create",
       reinterpret_cast<void*>(mocktail_bionic_pthread_create));
@@ -34406,14 +34445,26 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
       return true;
     };
     int main_loop_ticks = 0;
+    const bool fps_trace = IsEnabled("MOCKTAIL_TRACE_FPS");
+    const bool trace_main_loop = IsEnabled("MOCKTAIL_TRACE_MAIN_LOOP");
+    uint64_t fps_window_start_ns = fps_trace ? MonotonicNanos() : 0;
+    uint64_t fps_samples = 0;
+    uint64_t fps_tick_ns = 0;
+    uint64_t fps_sdl_ns = 0;
+    uint64_t fps_platform_ns = 0;
+    uint64_t fps_engine_ns = 0;
+    uint64_t fps_launch_ns = 0;
+    uint64_t fps_pace_sleep_ns = 0;
     while (true) {
+      const uint64_t fps_tick_start_ns = fps_trace ? MonotonicNanos() : 0;
       const bool keep_window_open = mocktail::window::PumpEvents();
       game_surface_events_completed = drain_game_surface_events();
+      const uint64_t fps_after_sdl_ns = fps_trace ? MonotonicNanos() : 0;
       if (!game_surface_events_completed || !keep_window_open) {
         break;
       }
       ++main_loop_ticks;
-      if (IsEnabled("MOCKTAIL_TRACE_MAIN_LOOP") &&
+      if (trace_main_loop &&
           (main_loop_ticks <= 10 || main_loop_ticks % 100 == 0)) {
         std::cerr << "  [main] SDL event loop tick #" << main_loop_ticks
                   << '\n'
@@ -34452,7 +34503,10 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
           break;
         }
       }
+      const uint64_t fps_after_platform_ns =
+          fps_trace ? MonotonicNanos() : 0;
       PumpRobloxMainThreadMessagesOnce();
+      const uint64_t fps_after_engine_ns = fps_trace ? MonotonicNanos() : 0;
       if (experience_composition != nullptr &&
           experience_composition->subscribed()) {
         const mocktail::Status launch_status =
@@ -34464,7 +34518,46 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
           break;
         }
       }
-      mocktail::window::PaceInputPump();
+      const uint64_t fps_after_launch_ns = fps_trace ? MonotonicNanos() : 0;
+      const uint64_t fps_pace_ns = mocktail::window::PaceInputPump();
+      if (fps_trace) {
+        const uint64_t fps_tick_end_ns = MonotonicNanos();
+        ++fps_samples;
+        fps_tick_ns += fps_tick_end_ns - fps_tick_start_ns;
+        fps_sdl_ns += fps_after_sdl_ns - fps_tick_start_ns;
+        fps_platform_ns += fps_after_platform_ns - fps_after_sdl_ns;
+        fps_engine_ns += fps_after_engine_ns - fps_after_platform_ns;
+        fps_launch_ns += fps_after_launch_ns - fps_after_engine_ns;
+        fps_pace_sleep_ns += fps_pace_ns;
+        if (fps_tick_end_ns - fps_window_start_ns >= 1000000000ULL &&
+            fps_samples != 0) {
+          std::fprintf(stderr,
+                       "  [fps] main n=%llu tick=%llu us sdl=%llu us "
+                       "drain=%llu us engine=%llu us launch=%llu us "
+                       "pace_sleep=%llu us\n",
+                       static_cast<unsigned long long>(fps_samples),
+                       static_cast<unsigned long long>(fps_tick_ns /
+                                                       fps_samples / 1000ULL),
+                       static_cast<unsigned long long>(fps_sdl_ns /
+                                                       fps_samples / 1000ULL),
+                       static_cast<unsigned long long>(fps_platform_ns /
+                                                       fps_samples / 1000ULL),
+                       static_cast<unsigned long long>(fps_engine_ns /
+                                                       fps_samples / 1000ULL),
+                       static_cast<unsigned long long>(fps_launch_ns /
+                                                       fps_samples / 1000ULL),
+                       static_cast<unsigned long long>(fps_pace_sleep_ns /
+                                                       fps_samples / 1000ULL));
+          fps_window_start_ns = fps_tick_end_ns;
+          fps_samples = 0;
+          fps_tick_ns = 0;
+          fps_sdl_ns = 0;
+          fps_platform_ns = 0;
+          fps_engine_ns = 0;
+          fps_launch_ns = 0;
+          fps_pace_sleep_ns = 0;
+        }
+      }
     }
     std::cout << "  [main] window closed, shutting down\n" << std::flush;
     real_frame_presented = mocktail::window::HasPresentedFrame();
