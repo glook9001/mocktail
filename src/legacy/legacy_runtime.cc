@@ -1127,6 +1127,77 @@ extern "C" int mocktail_mprotect(void* addr, size_t len, int prot) {
                     static_cast<size_t>(page_end - page_start), prot);
 }
 
+extern "C" {
+
+int mocktail_madvise(void* addr, size_t len, int advice) {
+  if (addr == nullptr || len == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  // Android Bionic allocator passes MADV_FREE (8). On Linux, MADV_DONTNEED (4)
+  // purges dirty pages immediately back to the kernel, avoiding allocator fragmentation.
+  constexpr int kBionicMadvFree = 8;
+  if (advice == kBionicMadvFree) {
+    advice = MADV_DONTNEED;
+  }
+  // For large allocations >= 2MB, apply HugePages advice to reduce TLB miss latency.
+  constexpr size_t kHugePageThreshold = 2 * 1024 * 1024;
+  if (len >= kHugePageThreshold && advice == MADV_WILLNEED) {
+#if defined(MADV_HUGEPAGE)
+    advice = MADV_HUGEPAGE;
+#endif
+  }
+  return ::madvise(addr, len, advice);
+}
+
+float mocktail_floorf(float x) noexcept { return __builtin_floorf(x); }
+float mocktail_ceilf(float x) noexcept { return __builtin_ceilf(x); }
+float mocktail_truncf(float x) noexcept { return __builtin_truncf(x); }
+float mocktail_roundf(float x) noexcept { return __builtin_roundf(x); }
+float mocktail_fabsf(float x) noexcept { return __builtin_fabsf(x); }
+float mocktail_fminf(float a, float b) noexcept { return __builtin_fminf(a, b); }
+float mocktail_fmaxf(float a, float b) noexcept { return __builtin_fmaxf(a, b); }
+float mocktail_fmaf(float x, float y, float z) noexcept { return __builtin_fmaf(x, y, z); }
+float mocktail_hypotf(float x, float y) noexcept { return __builtin_hypotf(x, y); }
+float mocktail_sqrtf(float x) noexcept { return __builtin_sqrtf(x); }
+
+double mocktail_floor(double x) noexcept { return __builtin_floor(x); }
+double mocktail_ceil(double x) noexcept { return __builtin_ceil(x); }
+double mocktail_trunc(double x) noexcept { return __builtin_trunc(x); }
+double mocktail_round(double x) noexcept { return __builtin_round(x); }
+double mocktail_fabs(double x) noexcept { return __builtin_fabs(x); }
+double mocktail_fmin(double a, double b) noexcept { return __builtin_fmin(a, b); }
+double mocktail_fmax(double a, double b) noexcept { return __builtin_fmax(a, b); }
+double mocktail_fma(double x, double y, double z) noexcept { return __builtin_fma(x, y, z); }
+double mocktail_hypot(double x, double y) noexcept { return __builtin_hypot(x, y); }
+double mocktail_sqrt(double x) noexcept { return __builtin_sqrt(x); }
+
+}  // extern "C"
+
+void RegisterBionicMathWrappers() {
+  linker::RegisterSymbol("floorf", reinterpret_cast<void*>(mocktail_floorf));
+  linker::RegisterSymbol("ceilf", reinterpret_cast<void*>(mocktail_ceilf));
+  linker::RegisterSymbol("truncf", reinterpret_cast<void*>(mocktail_truncf));
+  linker::RegisterSymbol("roundf", reinterpret_cast<void*>(mocktail_roundf));
+  linker::RegisterSymbol("fabsf", reinterpret_cast<void*>(mocktail_fabsf));
+  linker::RegisterSymbol("fminf", reinterpret_cast<void*>(mocktail_fminf));
+  linker::RegisterSymbol("fmaxf", reinterpret_cast<void*>(mocktail_fmaxf));
+  linker::RegisterSymbol("fmaf", reinterpret_cast<void*>(mocktail_fmaf));
+  linker::RegisterSymbol("hypotf", reinterpret_cast<void*>(mocktail_hypotf));
+  linker::RegisterSymbol("sqrtf", reinterpret_cast<void*>(mocktail_sqrtf));
+
+  linker::RegisterSymbol("floor", reinterpret_cast<void*>(mocktail_floor));
+  linker::RegisterSymbol("ceil", reinterpret_cast<void*>(mocktail_ceil));
+  linker::RegisterSymbol("trunc", reinterpret_cast<void*>(mocktail_trunc));
+  linker::RegisterSymbol("round", reinterpret_cast<void*>(mocktail_round));
+  linker::RegisterSymbol("fabs", reinterpret_cast<void*>(mocktail_fabs));
+  linker::RegisterSymbol("fmin", reinterpret_cast<void*>(mocktail_fmin));
+  linker::RegisterSymbol("fmax", reinterpret_cast<void*>(mocktail_fmax));
+  linker::RegisterSymbol("fma", reinterpret_cast<void*>(mocktail_fma));
+  linker::RegisterSymbol("hypot", reinterpret_cast<void*>(mocktail_hypot));
+  linker::RegisterSymbol("sqrt", reinterpret_cast<void*>(mocktail_sqrt));
+}
+
 void RegisterBionicDnsWrappers() {
   linker::RegisterSymbol("getaddrinfo",
                          reinterpret_cast<void*>(mocktail_getaddrinfo));
@@ -5385,6 +5456,8 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
   linker::RegisterSymbol("sendmsg",
                          reinterpret_cast<void*>(mocktail_bionic_sendmsg));
   linker::RegisterSymbol("mprotect", reinterpret_cast<void*>(mocktail_mprotect));
+  linker::RegisterSymbol("madvise", reinterpret_cast<void*>(mocktail_madvise));
+  RegisterBionicMathWrappers();
   linker::RegisterSymbol("pthread_condattr_init",
                          reinterpret_cast<void*>(mocktail_pthread_condattr_init));
   linker::RegisterSymbol("pthread_condattr_destroy",

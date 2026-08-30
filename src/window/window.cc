@@ -607,6 +607,8 @@ void ConfigureGraphicsBackendBeforeSDL() {
   SanitizeSdlVideoDriverOverrides();
 
   SDL_SetHint(SDL_HINT_VIDEO_FORCE_EGL, "1");
+  SDL_SetHint(SDL_HINT_THREAD_PRIORITY_POLICY, "1");
+  SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
 
   if (ShouldUseAngleVulkanBackend() || ShouldUseNativeVulkanBackend()) {
     // Mesa's implicit device selector can crash in the Android Vulkan path;
@@ -2059,17 +2061,8 @@ bool PumpEvents() {
   };
 
   SDL_Event event;
-  // Pump + PeepEvents drains without SDL_WaitEventTimeoutNS. Unthrottled
-  // ticks only ingest OS events every 4ms so the leader does not contend
-  // with the render thread on wl_display thousands of times per second.
-  constexpr uint64_t kUnthrottledPumpIntervalNs = 4000000ULL;
-  static uint64_t last_os_pump_ns = 0;
-  const uint64_t now_ns = SDL_GetTicksNS();
-  if (!UnthrottledPresentationRequested() || last_os_pump_ns == 0 ||
-      now_ns - last_os_pump_ns >= kUnthrottledPumpIntervalNs) {
-    SDL_PumpEvents();
-    last_os_pump_ns = now_ns;
-  }
+  // Pump events immediately on every tick for zero-latency input ingestion.
+  SDL_PumpEvents();
   while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST,
                         SDL_EVENT_LAST) > 0) {
     if (event.type != SDL_EVENT_MOUSE_MOTION) {
@@ -2261,21 +2254,9 @@ bool UnthrottledPresentationRequested() {
 }
 
 uint64_t PaceInputPump() {
-  if (!g_state.initialised) {
-    return 0;
-  }
-  if (UnthrottledPresentationRequested()) {
-    return 0;
-  }
-  if (__builtin_expect(SDL_HasEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST), 0)) {
-    return 0;
-  }
-  const uint64_t delay_ns =
-      g_input_pump_pacer.DelayBeforeNextPump(SDL_GetTicksNS());
-  if (delay_ns != 0) {
-    SDL_DelayPrecise(delay_ns);
-  }
-  return delay_ns;
+  // Zero-delay pacer: never sleep on the main engine thread to avoid adding artificial
+  // 1-4ms latency bubbles to user input processing.
+  return 0;
 }
 
 void Shutdown() {

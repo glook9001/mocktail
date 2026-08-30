@@ -105,18 +105,12 @@ std::uint32_t PreferSwapchainMinImageCount(PresentModePolicy policy,
                                            std::uint32_t min_images,
                                            std::uint32_t max_images) {
   std::uint32_t count = std::max(requested, min_images);
-  if (policy == PresentModePolicy::kUnthrottled) {
-    constexpr std::uint32_t kUnthrottledImages = 5;
-    count = std::max(count, kUnthrottledImages);
-    if (min_images != 0) {
-      count = std::max(count, min_images + 2);
-    }
-  } else if (policy == PresentModePolicy::kVsync) {
-    constexpr std::uint32_t kVsyncImages = 4;
-    count = std::max(count, kVsyncImages);
-    if (min_images != 0) {
-      count = std::max(count, min_images + 2);
-    }
+  // Low-latency triple buffering (1 displayed, 1 ready, 1 rendering).
+  // Avoids deep swapchain queuing (4-5 images) which adds 30-50ms of input lag.
+  constexpr std::uint32_t kLowLatencyImageCount = 3;
+  count = std::max(count, kLowLatencyImageCount);
+  if (min_images != 0) {
+    count = std::max(count, min_images);
   }
   if (max_images != 0) {
     count = std::min(count, max_images);

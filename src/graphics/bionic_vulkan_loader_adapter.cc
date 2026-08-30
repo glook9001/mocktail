@@ -346,7 +346,7 @@ void InvalidateFastDispatchCaches() {
 static const AdapterState::DeviceDispatch kEmptyDeviceDispatch{};
 
 const AdapterState::DeviceDispatch& HostDispatchForQueue(VkQueue queue) {
-  const uint64_t gen = g_dispatch_generation.load(std::memory_order_acquire);
+  const uint64_t gen = g_dispatch_generation.load(std::memory_order_relaxed);
   if (__builtin_expect(queue != VK_NULL_HANDLE &&
                            t_queue_cache.queue == queue &&
                            t_queue_cache.generation == gen,
@@ -378,7 +378,7 @@ const AdapterState::DeviceDispatch& HostDispatchForQueue(VkQueue queue) {
 }
 
 const AdapterState::DeviceDispatch& HostDispatchForDevice(VkDevice device) {
-  const uint64_t gen = g_dispatch_generation.load(std::memory_order_acquire);
+  const uint64_t gen = g_dispatch_generation.load(std::memory_order_relaxed);
   if (__builtin_expect(device != VK_NULL_HANDLE &&
                            t_device_cache.device == device &&
                            t_device_cache.generation == gen,
@@ -403,7 +403,7 @@ const AdapterState::DeviceDispatch& HostDispatchForDevice(VkDevice device) {
 
 const AdapterState::DeviceDispatch& HostDispatchForCommandBuffer(
     VkCommandBuffer command_buffer) {
-  const uint64_t gen = g_dispatch_generation.load(std::memory_order_acquire);
+  const uint64_t gen = g_dispatch_generation.load(std::memory_order_relaxed);
   if (__builtin_expect(command_buffer != VK_NULL_HANDLE &&
                            t_command_buffer_cache.command_buffer ==
                                command_buffer &&

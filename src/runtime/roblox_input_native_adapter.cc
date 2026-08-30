@@ -275,7 +275,7 @@ Status RobloxInputNativeAdapter::MouseMove(float x, float y, float delta_x,
     return status;
   }
   symbols_.pass_mouse_move(env, native_input_class_, x, y, delta_x, delta_y);
-  return CheckJniException(env, "nativePassMouseMove");
+  return Status::Ok();
 }
 
 Status RobloxInputNativeAdapter::MouseButton(float x, float y, bool pressed,

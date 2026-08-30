@@ -32,8 +32,13 @@ void Class::RegisterMethod(const std::string& method_name,
 
 const MethodCallback* Class::FindMethod(const std::string& method_name,
                                         const std::string& signature) const {
-  const std::string key = method_name + ":" + signature;
-  auto it = methods_.find(key);
+  thread_local std::string lookup_key;
+  lookup_key.clear();
+  lookup_key.reserve(method_name.size() + signature.size() + 1);
+  lookup_key.append(method_name);
+  lookup_key.push_back(':');
+  lookup_key.append(signature);
+  auto it = methods_.find(lookup_key);
   if (it == methods_.end()) {
     return nullptr;
   }

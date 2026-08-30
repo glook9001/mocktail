@@ -249,7 +249,7 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
     const bool manual_quality =
         quality_str == "auto" || quality_str == "0" || quality_str == "manual";
 
-    const std::array<ClientSetting, 70> rendering_settings = {{
+    const std::array<ClientSetting, 75> rendering_settings = {{
         {"FIntSmoothClusterTaskQueueMaxParallelTasks", workers},
         {"FIntOcclusionWorkerThreadCount", occlusion_workers},
         {"FFlagMovePrerenderV2", "True"},
@@ -318,8 +318,13 @@ bool MergePerformanceClientSettingsOverrides(const PerformancePolicy& policy,
         {"FFlagLocalStorageArenaOptimization", "True"},
         {"FIntProjectedMaxBytesUsedForSoundsMB", "32"},
         {"FIntAudioMetadataCacheSizeKB", "2048"},
-        {"FIntDefaultAudioDecodeBufferSizeMs", "50"},
+        {"FIntDefaultAudioDecodeBufferSizeMs", "20"},
         {"FIntMaxAudibleSoundChannels", "32"},
+        {"FFlagLuauNativeCodeGen", "True"},
+        {"FFlagLuauNativeCodeGenMode2", "True"},
+        {"FFlagRenderMeshPartBatching", "True"},
+        {"FFlagRenderEnableInstancing", "True"},
+        {"FFlagRenderFastClusterPrepass", "True"},
     }};
     if (!apply_settings(rendering_settings)) {
       return false;

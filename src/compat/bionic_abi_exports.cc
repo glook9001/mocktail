@@ -872,9 +872,6 @@ int mocktail_pthread_mutex_unlock(pthread_mutex_t* mutex) {
   } else {
     unlock_result = mocktail_bionic_owned_mutex_unlock(mutex, old_state);
   }
-  if (unlock_result == 0) {
-    mocktail::compat::ApplyHttpClientSpinGuard();
-  }
   return unlock_result;
 }
 

@@ -53,18 +53,18 @@ TEST(PresentModePolicyTest, PrefersLatestReadyThenRelaxedOverFifo) {
             (std::vector<VkPresentModeKHR>{VK_PRESENT_MODE_FIFO_RELAXED_KHR}));
 }
 
-TEST(PresentModePolicyTest, RequestsExtraSwapchainImagesWhenUnthrottled) {
+TEST(PresentModePolicyTest, RequestsLowLatencySwapchainImages) {
   EXPECT_EQ(PreferSwapchainMinImageCount(PresentModePolicy::kVsync, 2, 2, 8),
-            4U);
+            3U);
   EXPECT_EQ(
       PreferSwapchainMinImageCount(PresentModePolicy::kUnthrottled, 2, 2, 8),
-      5U);
+      3U);
   EXPECT_EQ(
       PreferSwapchainMinImageCount(PresentModePolicy::kUnthrottled, 1, 2, 2),
       2U);
   EXPECT_EQ(
       PreferSwapchainMinImageCount(PresentModePolicy::kUnthrottled, 2, 2, 0),
-      5U);
+      3U);
 }
 
 } // namespace
