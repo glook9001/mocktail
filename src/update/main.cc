@@ -150,7 +150,8 @@ void Usage(std::ostream& output) {
             "  verify-current\n"
             "  verify-apk APK\n"
             "  prepare-apks OUTPUT APK [APK...]\n"
-            "  derive-host-abi OUTPUT REF_LIB REF_PROFILE CANDIDATE_DIR\n"
+            "  derive-host-abi OUTPUT REF_LIB REF_PROFILE CANDIDATE_DIR "
+            "[REF_COMPAT...]\n"
             "  status\n"
             "  rollback\n";
 }
@@ -274,12 +275,15 @@ int main(int argc, char** argv) {
     return 0;
   }
   if (command == "derive-host-abi") {
-    if (argc != 6) return 2;
+    if (argc < 6) return 2;
     mocktail::update::HostAbiDerivationOptions options;
     options.output_directory = argv[2];
     options.reference_library = argv[3];
     options.reference_profile = argv[4];
     options.candidate_payload_directory = argv[5];
+    for (int index = 6; index < argc; ++index) {
+      options.reference_compatibility_manifests.emplace_back(argv[index]);
+    }
     const auto derived = mocktail::update::DeriveHostAbiProfile(options);
     if (!derived) {
       std::cerr << "[native-updater] " << derived.error << '\n';

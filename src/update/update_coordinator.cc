@@ -279,6 +279,7 @@ Candidate DownloadCandidate(const ApkProvider* provider, PayloadStore* store,
 struct ReferenceProfile {
   std::filesystem::path library;
   std::filesystem::path profile;
+  std::vector<std::filesystem::path> compatibility_manifests;
   std::string error;
 
   explicit operator bool() const {
@@ -302,6 +303,19 @@ ReferenceProfile ResolveReference(const UpdatePaths& paths,
             installed.payload_directory / "libroblox.so", filesystem_error)) {
       result.library = installed.payload_directory / "libroblox.so";
       result.profile = installed.host_abi_profile;
+      if (!installed.compatibility_manifest.empty() &&
+          std::filesystem::is_regular_file(installed.compatibility_manifest,
+                                           filesystem_error)) {
+        result.compatibility_manifests.push_back(
+            installed.compatibility_manifest);
+      }
+      if (std::filesystem::is_regular_file(paths.compatibility_manifest,
+                                           filesystem_error) &&
+          (result.compatibility_manifests.empty() ||
+           result.compatibility_manifests.front() !=
+               paths.compatibility_manifest)) {
+        result.compatibility_manifests.push_back(paths.compatibility_manifest);
+      }
       return result;
     }
   }
@@ -317,6 +331,7 @@ ReferenceProfile ResolveReference(const UpdatePaths& paths,
                                        filesystem_error)) {
     result.library = preferred_directory / "libroblox.so";
     result.profile = paths.host_abi_reference_profile;
+    result.compatibility_manifests.push_back(paths.compatibility_manifest);
     return result;
   }
   Candidate downloaded =
@@ -334,6 +349,7 @@ ReferenceProfile ResolveReference(const UpdatePaths& paths,
   }
   result.library = downloaded.staged.payload_directory / "libroblox.so";
   result.profile = paths.host_abi_reference_profile;
+  result.compatibility_manifests.push_back(paths.compatibility_manifest);
   return result;
 }
 
@@ -405,6 +421,8 @@ UpdateResult RunUnsafeLatest(
     HostAbiDerivationOptions derivation;
     derivation.reference_library = reference.library;
     derivation.reference_profile = reference.profile;
+    derivation.reference_compatibility_manifests =
+        reference.compatibility_manifests;
     derivation.candidate_payload_directory = candidate.staged.payload_directory;
     derivation.output_directory = workspace / "derived";
     Progress(request.progress_fd, "Deriving latest Roblox compatibility...");
@@ -580,9 +598,9 @@ UpdateResult RunUpdate(const UpdatePaths& paths, const UpdateRequest& request) {
   if (request.check_latest) {
     Progress(request.progress_fd, "Checking Roblox...");
     const ProviderVersion latest = [&] {
-    StageTimer timer("check-latest");
-    return provider.CheckLatest();
-  }();
+      StageTimer timer("check-latest");
+      return provider.CheckLatest();
+    }();
     if (latest) {
       latest_version = latest;
       if (current && SameVersion(current, latest)) {
@@ -668,6 +686,8 @@ UpdateResult RunUpdate(const UpdatePaths& paths, const UpdateRequest& request) {
       HostAbiDerivationOptions derivation;
       derivation.reference_library = reference.library;
       derivation.reference_profile = reference.profile;
+      derivation.reference_compatibility_manifests =
+          reference.compatibility_manifests;
       derivation.candidate_payload_directory =
           candidate.staged.payload_directory;
       derivation.output_directory = workspace / "derived";

@@ -3,12 +3,14 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace mocktail::update {
 
 struct HostAbiDerivationOptions {
   std::filesystem::path reference_library;
   std::filesystem::path reference_profile;
+  std::vector<std::filesystem::path> reference_compatibility_manifests;
   std::filesystem::path candidate_payload_directory;
   std::filesystem::path output_directory;
 };
