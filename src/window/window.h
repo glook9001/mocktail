@@ -62,6 +62,7 @@ struct WindowViewportSnapshot {
   int logical_height = 0;
   int pixel_width = 0;
   int pixel_height = 0;
+  float dpi_scale = 1.0f;
 
   bool valid() const {
     return logical_width > 0 && logical_height > 0 && pixel_width > 0 &&

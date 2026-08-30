@@ -713,6 +713,14 @@ void* QueryNativeWindowHandle() {
   return g_state.direct_vulkan ? g_state.sdl_window : nullptr;
 }
 
+float QueryWindowDpiScale() {
+  if (g_state.sdl_window == nullptr) {
+    return 1.0f;
+  }
+  const float scale = SDL_GetWindowDisplayScale(g_state.sdl_window);
+  return scale > 0.0f ? scale : 1.0f;
+}
+
 void ResolveNativeWindowHandle() {
   g_state.native_window = QueryNativeWindowHandle();
   if (g_state.native_window == nullptr) {
@@ -745,7 +753,8 @@ bool ActivateWindowEventLifecycles() {
   }
   const Status surface_status = g_window_surface_lifecycle.Activate(
       reinterpret_cast<uintptr_t>(g_state.native_window),
-      static_cast<uint32_t>(pixel_width), static_cast<uint32_t>(pixel_height));
+      static_cast<uint32_t>(pixel_width), static_cast<uint32_t>(pixel_height),
+      QueryWindowDpiScale());
   if (!surface_status.ok()) {
     fprintf(stderr, "  [window] typed surface lifecycle failed: %s\n",
             surface_status.message().c_str());
@@ -1418,6 +1427,7 @@ WindowViewportSnapshot GetWindowViewportSnapshot() {
                     &snapshot.logical_height);
   SDL_GetWindowSizeInPixels(g_state.sdl_window, &snapshot.pixel_width,
                             &snapshot.pixel_height);
+  snapshot.dpi_scale = QueryWindowDpiScale();
   return snapshot;
 }
 
@@ -2129,7 +2139,8 @@ bool PumpEvents() {
       const Status surface_status = g_window_surface_lifecycle.Observe(
           reinterpret_cast<uintptr_t>(observed_native_window),
           pixel_width > 0 ? static_cast<uint32_t>(pixel_width) : 0,
-          pixel_height > 0 ? static_cast<uint32_t>(pixel_height) : 0);
+          pixel_height > 0 ? static_cast<uint32_t>(pixel_height) : 0,
+          QueryWindowDpiScale());
       if (!surface_status.ok()) {
         fprintf(stderr, "  [window] surface event rejected: %s\n",
                 surface_status.message().c_str());

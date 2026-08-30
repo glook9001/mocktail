@@ -2559,7 +2559,9 @@ jobject BuildPlatformParams(JNIEnv* env, jobject surface, bool is_headless) {
   SetIntField(env, params, "densityDpi", 160);
   SetIntField(env, params, "viewportWidthMm", 203);
   SetIntField(env, params, "viewportHeightMm", 114);
-  SetFloatField(env, params, "dpiScale", 1.0f);
+  const mocktail::window::WindowViewportSnapshot viewport =
+      mocktail::window::GetWindowViewportSnapshot();
+  SetFloatField(env, params, "dpiScale", viewport.dpi_scale);
   SetBooleanField(
       env, params, "isKeyboardDevice",
       IsEnabled("MOCKTAIL_KEYBOARD_ENABLED_INTERNAL") ? JNI_TRUE : JNI_FALSE);
@@ -4276,7 +4278,7 @@ std::cerr << "  [engine] nativeAppBridgeV2InitWithParams recovered\n"
     }
     mocktail::runtime::GameSurface game_surface{
         window_surface.generation, window_surface.native_window,
-        window_surface.width, window_surface.height};
+        window_surface.width, window_surface.height, window_surface.dpi_scale};
     mocktail::runtime::RobloxGameSessionBinding binding{
         {native_gl_class, surface, platform_params, game_surface_activity,
          start_game_params},
@@ -5780,6 +5782,8 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
             raw_vm, jni_vm.get(), &RestoreGameSessionJniEnvironment};
         mocktail::runtime::RobloxGameSurfaceJniConfig surface_config;
         surface_config.asset_folder_path = DefaultAssetPath();
+        surface_config.dpi_scale =
+            mocktail::window::GetWindowViewportSnapshot().dpi_scale;
         surface_config.is_touch_device = input_capabilities.touch_enabled;
         surface_config.is_mouse_device = input_capabilities.mouse_enabled;
         surface_config.is_keyboard_device =
@@ -6424,6 +6428,8 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
           &ClearFreshGamePresentObserver};
       mocktail::runtime::RobloxGameSurfaceJniConfig surface_config;
       surface_config.asset_folder_path = DefaultAssetPath();
+      surface_config.dpi_scale =
+          mocktail::window::GetWindowViewportSnapshot().dpi_scale;
       surface_config.is_touch_device = input_capabilities.touch_enabled;
       surface_config.is_mouse_device = input_capabilities.mouse_enabled;
       surface_config.is_keyboard_device = input_capabilities.keyboard_enabled;
@@ -6637,7 +6643,7 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
       readiness.principal.base_url = "https://www.roblox.com/";
       readiness.surface = {window_surface.generation,
                            window_surface.native_window, window_surface.width,
-                           window_surface.height};
+                           window_surface.height, window_surface.dpi_scale};
       readiness.username = dependencies.account_identity().username;
       const mocktail::Status experience_status =
           experience_composition->OnLuaAppReady(std::move(readiness));
