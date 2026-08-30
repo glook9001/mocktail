@@ -16,6 +16,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "mocktail/graphics/present_mode_policy.h"
 #include "mocktail/platform/display_refresh_capabilities.h"
@@ -454,6 +455,56 @@ VideoDriverChoice ResolveConfiguredVideoDriverChoice() {
   return ResolveVideoDriverChoice(input);
 }
 
+std::vector<std::string_view> AvailableSdlVideoDrivers() {
+  std::vector<std::string_view> drivers;
+  const int count = SDL_GetNumVideoDrivers();
+  if (count > 0) {
+    drivers.reserve(static_cast<std::size_t>(count));
+  }
+  for (int index = 0; index < count; ++index) {
+    const char* driver = SDL_GetVideoDriver(index);
+    if (driver != nullptr && driver[0] != '\0') {
+      drivers.emplace_back(driver);
+    }
+  }
+  return drivers;
+}
+
+bool DropUnavailableSdlVideoDriverOverride(
+    const char* variable,
+    const std::vector<std::string_view>& available_drivers) {
+  const char* requested = std::getenv(variable);
+  if (requested == nullptr || requested[0] == '\0' ||
+      HasAvailableVideoDriverCandidate(requested, available_drivers)) {
+    return false;
+  }
+  if (unsetenv(variable) != 0) {
+    std::fprintf(stderr,
+                 "  [window] cannot clear unavailable %s override: %s\n",
+                 variable, std::strerror(errno));
+    return false;
+  }
+  std::fprintf(stderr,
+               "  [window] ignoring unavailable %s override; using SDL "
+               "automatic video-driver detection\n",
+               variable);
+  return true;
+}
+
+void SanitizeSdlVideoDriverOverrides() {
+  const std::vector<std::string_view> available_drivers =
+      AvailableSdlVideoDrivers();
+  if (available_drivers.empty()) {
+    return;
+  }
+  (void)DropUnavailableSdlVideoDriverOverride("SDL_VIDEODRIVER",
+                                              available_drivers);
+  if (DropUnavailableSdlVideoDriverOverride("SDL_VIDEO_DRIVER",
+                                            available_drivers)) {
+    SDL_ResetHint(SDL_HINT_VIDEO_DRIVER);
+  }
+}
+
 bool ShouldShowWindowImmediately() {
   if (IsEnabledEnv("MOCKTAIL_HIDE_WINDOW_UNTIL_FIRST_SWAP")) {
     return false;
@@ -552,6 +603,8 @@ SDL_EGLAttrib* SDLCALL AnglePlatformAttributes(void* /*userdata*/) {
 void ConfigureGraphicsBackendBeforeSDL() {
   g_preferred_egl_library[0] = '\0';
   g_preferred_gles_library[0] = '\0';
+
+  SanitizeSdlVideoDriverOverrides();
 
   SDL_SetHint(SDL_HINT_VIDEO_FORCE_EGL, "1");
 
@@ -2248,7 +2301,7 @@ void Shutdown() {
   g_pointer_capture_backend.reset();
   g_text_input_owner.reset();
   g_text_input_backend.reset();
-  if (!g_state.direct_vulkan) {
+  if (!g_state.direct_vulkan && g_state.egl_context != nullptr) {
     SDL_GL_MakeCurrent(g_state.sdl_window, nullptr);
   }
   if (!g_state.direct_vulkan && g_state.egl_context) {
@@ -2262,6 +2315,7 @@ void Shutdown() {
   SDL_Quit();
   g_state.initialised = false;
   g_state.native_window = nullptr;
+  g_state.software_window = false;
   g_state.direct_vulkan = false;
   g_state.display_refresh = {};
   g_state.input_test_sequence_queued = false;
