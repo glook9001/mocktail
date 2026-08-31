@@ -676,7 +676,7 @@ Status ExternalLaunchBroker::ForwardToOwner(
                                      last_error));
       }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   return Unavailable(
       ErrnoMessage("external-launch owner is unavailable", last_error));

@@ -58,6 +58,7 @@ OwnedPthreadWaitResult OwnedPthread::WaitFor(int timeout_ms,
   const bool wait_forever = timeout_ms < 0;
   const int effective_poll_ms = poll_interval_ms > 0 ? poll_interval_ms : 1;
   const auto started_at = std::chrono::steady_clock::now();
+  int loop_count = 0;
   while (true) {
     const int join_result = pthread_tryjoin_np(thread_, nullptr);
     if (join_result == 0) {
@@ -77,7 +78,7 @@ OwnedPthreadWaitResult OwnedPthread::WaitFor(int timeout_ms,
       pump(pump_context);
     }
 
-    int sleep_ms = effective_poll_ms;
+    int sleep_ms = (loop_count++ < 3) ? 1 : effective_poll_ms;
     if (!wait_forever) {
       const int remaining_ms = timeout_ms - static_cast<int>(elapsed.count());
       if (remaining_ms < sleep_ms) {

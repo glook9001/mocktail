@@ -896,7 +896,19 @@ bool RunTaskSchedulerForegroundOnMainThread(
         return true;
       }
     }
-    usleep(1000);
+    for (int spin = 0; spin < 32; ++spin) {
+      if (g_pending_main_thread_task_scheduler_state.load(
+              std::memory_order_acquire) == kMainThreadTaskSchedulerComplete) {
+        break;
+      }
+#if defined(__x86_64__) || defined(__i386__)
+      __builtin_ia32_pause();
+#endif
+    }
+    if (g_pending_main_thread_task_scheduler_state.load(
+            std::memory_order_acquire) != kMainThreadTaskSchedulerComplete) {
+      usleep(250);
+    }
   }
 }
 
