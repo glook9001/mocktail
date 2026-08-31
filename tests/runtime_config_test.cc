@@ -54,7 +54,7 @@ TEST(RuntimeConfigTest, UsesSupportedDefaults) {
   EXPECT_TRUE(config.desktop_playability());
   ASSERT_TRUE(config.roblox_http_user_agent().has_value());
   EXPECT_EQ(*config.roblox_http_user_agent(), kRobloxDesktopHttpUserAgent);
-  EXPECT_EQ(config.frame_rate().mode, FrameRateLimitMode::kDisplay);
+  EXPECT_EQ(config.frame_rate().mode, FrameRateLimitMode::kUnmanaged);
   EXPECT_FALSE(config.performance().multithreaded_rendering);
   EXPECT_GT(config.performance().physical_core_count, 0);
   EXPECT_EQ(config.performance().memory_limit_mb, 0U);

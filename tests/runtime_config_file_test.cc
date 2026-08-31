@@ -100,7 +100,7 @@ TEST(RuntimeConfigBootstrapTest, CreatesCompletePrivateFirstRunFile) {
   ASSERT_TRUE(loaded) << loaded.error;
   EXPECT_TRUE(loaded.file_loaded);
   EXPECT_EQ(loaded.config.graphics_backend(), GraphicsBackend::kVulkan);
-  EXPECT_EQ(loaded.config.frame_rate().mode, FrameRateLimitMode::kDisplay);
+  EXPECT_EQ(loaded.config.frame_rate().mode, FrameRateLimitMode::kUnmanaged);
   EXPECT_EQ(loaded.config.vsync_mode(), "auto");
   EXPECT_FALSE(loaded.config.performance().multithreaded_rendering);
   EXPECT_EQ(loaded.config.performance().memory_limit_mb, 0U);
@@ -132,10 +132,10 @@ TEST(RuntimeConfigBootstrapTest,
            "window.\n  headless: false",
            "# Recommended values: direct-vulkan, opengl, system, "
            "angle-vulkan.\n  backend: direct-vulkan",
-           "# selects Roblox's unmodified 240-FPS scheduler maximum.\n  "
-           "frame_rate_limit: display",
-           "# String (default: auto): presentation synchronization: auto, "
-           "on, or off.\n  vsync: auto",
+           "# DFIntTaskSchedulerTargetFps without a whitelist.\n  "
+           "# frame_rate_limit: -1",
+           "# Optional presentation synchronization override: auto, on, or "
+           "off.\n  # vsync: off",
            "# physical CPU core. A place's Lua/main thread can still remain "
            "serial.\n  multithreaded_rendering: false",
            "# sizes and coalesces midphase work. Supported: auto, latency, "

@@ -674,6 +674,9 @@ bool LoadYaml(const std::filesystem::path& path, ValueMap* values, bool* loaded,
 }
 
 std::string FrameRateValue(const FrameRatePolicy& policy) {
+  if (policy.mode == FrameRateLimitMode::kUnmanaged) {
+    return "-1";
+  }
   if (policy.mode == FrameRateLimitMode::kUnlimited) {
     return "unlimited";
   }

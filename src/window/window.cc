@@ -156,6 +156,13 @@ static char g_preferred_gles_library[4096];
 static bool g_auto_angle_retry_attempted = false;
 static std::filesystem::path g_window_state_path;
 
+WindowStartupPresentationPlan RestoredWindowPresentationPlan() {
+  if (!g_state.state_persistence_active) {
+    return {};
+  }
+  return PlanWindowStartupPresentation(g_state.persisted_window);
+}
+
 // Floors the live window at the size a restored geometry already has to clear.
 void ApplyMinimumWindowSize(SDL_Window* window) {
   if (window == nullptr) {
@@ -164,6 +171,17 @@ void ApplyMinimumWindowSize(SDL_Window* window) {
   if (!SDL_SetWindowMinimumSize(window, kMinimumWindowWidth,
                                 kMinimumWindowHeight)) {
     std::fprintf(stderr, "  [window] SDL minimum size rejected: %s\n",
+                 SDL_GetError());
+  }
+}
+
+void ApplyRestoredWindowMaximization(
+    SDL_Window* window, const WindowStartupPresentationPlan& plan) {
+  if (window == nullptr || !plan.maximize_after_constraints) {
+    return;
+  }
+  if (!SDL_MaximizeWindow(window)) {
+    std::fprintf(stderr, "  [window-state] SDL maximize restore failed: %s\n",
                  SDL_GetError());
   }
 }
@@ -865,13 +883,12 @@ bool CreateSoftwareWaitingWindow(int width, int height, const char* title) {
   fprintf(stderr,
           "  [window] TEST-ONLY graphics stubs explicitly enabled; creating "
           "a non-rendering waiting window\n");
+  const WindowStartupPresentationPlan presentation =
+      RestoredWindowPresentationPlan();
   SDL_WindowFlags window_flags = ApplyHighPixelDensityWindowFlag(
-      0, IsEnabledEnv("MOCKTAIL_WIN_HIGH_DPI"));
-  if (g_state.state_persistence_active && g_state.persisted_window.fullscreen) {
+      SDL_WINDOW_RESIZABLE, IsEnabledEnv("MOCKTAIL_WIN_HIGH_DPI"));
+  if (presentation.fullscreen_at_creation) {
     window_flags |= SDL_WINDOW_FULLSCREEN;
-  } else if (g_state.state_persistence_active &&
-             g_state.persisted_window.maximized) {
-    window_flags |= SDL_WINDOW_MAXIMIZED;
   }
   if (!ShouldShowWindowImmediately()) {
     window_flags |= SDL_WINDOW_HIDDEN;
@@ -887,6 +904,7 @@ bool CreateSoftwareWaitingWindow(int width, int height, const char* title) {
   ApplyWindowIcon(g_state.sdl_window);
   ApplyMinimumWindowSize(g_state.sdl_window);
   ApplyRestoredWindowPosition();
+  ApplyRestoredWindowMaximization(g_state.sdl_window, presentation);
 
   g_state.software_window = true;
   fprintf(stderr, "  [window] software SDL waiting window created (%dx%d)\n",
@@ -1003,15 +1021,13 @@ bool Init(int width, int height, const char* title) {
       fprintf(stderr, "  [window] SDL_Init failed: %s\n", SDL_GetError());
       return false;
     }
+    const WindowStartupPresentationPlan presentation =
+        RestoredWindowPresentationPlan();
     SDL_WindowFlags window_flags = ApplyHighPixelDensityWindowFlag(
         SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE,
         IsEnabledEnv("MOCKTAIL_WIN_HIGH_DPI"));
-    if (g_state.state_persistence_active &&
-        g_state.persisted_window.fullscreen) {
+    if (presentation.fullscreen_at_creation) {
       window_flags |= SDL_WINDOW_FULLSCREEN;
-    } else if (g_state.state_persistence_active &&
-               g_state.persisted_window.maximized) {
-      window_flags |= SDL_WINDOW_MAXIMIZED;
     }
     if (!ShouldShowWindowImmediately()) {
       window_flags |= SDL_WINDOW_HIDDEN;
@@ -1027,6 +1043,7 @@ bool Init(int width, int height, const char* title) {
     ApplyWindowIcon(g_state.sdl_window);
     ApplyMinimumWindowSize(g_state.sdl_window);
     ApplyRestoredWindowPosition();
+    ApplyRestoredWindowMaximization(g_state.sdl_window, presentation);
     g_state.direct_vulkan = true;
     g_state.initialised = true;
     ResolveNativeWindowHandle();
@@ -1146,14 +1163,13 @@ bool Init(int width, int height, const char* title) {
   SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
+  const WindowStartupPresentationPlan presentation =
+      RestoredWindowPresentationPlan();
   SDL_WindowFlags window_flags = ApplyHighPixelDensityWindowFlag(
       SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE,
       IsEnabledEnv("MOCKTAIL_WIN_HIGH_DPI"));
-  if (g_state.state_persistence_active && g_state.persisted_window.fullscreen) {
+  if (presentation.fullscreen_at_creation) {
     window_flags |= SDL_WINDOW_FULLSCREEN;
-  } else if (g_state.state_persistence_active &&
-             g_state.persisted_window.maximized) {
-    window_flags |= SDL_WINDOW_MAXIMIZED;
   }
   if (!ShouldShowWindowImmediately()) {
     window_flags |= SDL_WINDOW_HIDDEN;
@@ -1175,6 +1191,7 @@ bool Init(int width, int height, const char* title) {
   ApplyWindowIcon(g_state.sdl_window);
   ApplyMinimumWindowSize(g_state.sdl_window);
   ApplyRestoredWindowPosition();
+  ApplyRestoredWindowMaximization(g_state.sdl_window, presentation);
   fprintf(stderr, "  [window] SDL3 window created (%dx%d)\n", width, height);
   ShowWindowAccordingToStartupMode();
 
@@ -2169,6 +2186,7 @@ bool PumpEvents() {
         }
         if ((event.type == SDL_EVENT_WINDOW_RESIZED ||
              event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+             event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED ||
              event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN ||
              event.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) &&
             g_text_input_owner != nullptr &&

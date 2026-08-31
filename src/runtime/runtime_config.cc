@@ -268,7 +268,7 @@ RuntimeConfig RuntimeConfig::FromEnvironment(const Environment& environment) {
         config.device_profile_.roblox_http_user_agent;
   }
   config.frame_rate_ = ParseFrameRatePolicy(
-      environment.GetOr("MOCKTAIL_FRAME_RATE_LIMIT", "display"));
+      environment.GetOr("MOCKTAIL_FRAME_RATE_LIMIT", "-1"));
   config.vsync_mode_ = environment.GetOr("MOCKTAIL_VSYNC", "auto");
   config.performance_ = ParsePerformancePolicy(
       environment.GetOr("MOCKTAIL_MULTITHREADED_RENDERING", "0"),

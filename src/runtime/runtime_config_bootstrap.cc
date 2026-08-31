@@ -57,12 +57,13 @@ graphics:
   # without a working Vulkan driver; OpenGL ES 3.0 or newer is required.
   # Recommended values: direct-vulkan, opengl, system, angle-vulkan.
   backend: direct-vulkan
-  # String or integer (default: display): requested frame-rate policy.
-  # Supported values: display, unlimited, 30, 60, 120, 144, 240. Unlimited
-  # selects Roblox's unmodified 240-FPS scheduler maximum.
-  frame_rate_limit: display
-  # String (default: auto): presentation synchronization: auto, on, or off.
-  vsync: auto
+  # Optional string or integer: Mocktail frame-rate override. Leave commented
+  # (or use -1) to let Roblox Basic Settings own the cap. Supported overrides:
+  # display, unlimited, or any positive integer; fixed values are forwarded to
+  # DFIntTaskSchedulerTargetFps without a whitelist.
+  # frame_rate_limit: -1
+  # Optional presentation synchronization override: auto, on, or off.
+  # vsync: off
 
 performance:
   # Boolean (default: false): size Roblox scheduler/render queues from every

@@ -4426,7 +4426,7 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
       runtime_config.input_capabilities();
   if (!runtime_config.frame_rate().valid()) {
     std::cerr << "[FATAL] Invalid MOCKTAIL_FRAME_RATE_LIMIT; expected "
-                 "display, 30, 60, 120, 144, 240, or unlimited\n";
+                 "-1, display, unlimited, or a positive integer\n";
     return EXIT_FAILURE;
   }
   if (!runtime_config.theme_mode_valid()) {
