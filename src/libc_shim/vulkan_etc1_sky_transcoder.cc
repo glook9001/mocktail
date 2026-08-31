@@ -118,25 +118,28 @@ Rgb UnpackRgb565(uint16_t color) {
           static_cast<uint8_t>((b << 3) | (b >> 2))};
 }
 
-uint32_t ColorDistance(const Rgb &lhs, const Rgb &rhs) {
-  const int dr = lhs.r - rhs.r;
-  const int dg = lhs.g - rhs.g;
-  const int db = lhs.b - rhs.b;
+inline uint32_t ColorDistance(const Rgb &lhs, const Rgb &rhs) {
+  const int dr = static_cast<int>(lhs.r) - static_cast<int>(rhs.r);
+  const int dg = static_cast<int>(lhs.g) - static_cast<int>(rhs.g);
+  const int db = static_cast<int>(lhs.b) - static_cast<int>(rhs.b);
   return static_cast<uint32_t>(dr * dr + dg * dg + db * db);
 }
 
-uint32_t ReadLe32(const uint8_t *bytes) {
-  return static_cast<uint32_t>(bytes[0]) |
-         (static_cast<uint32_t>(bytes[1]) << 8) |
-         (static_cast<uint32_t>(bytes[2]) << 16) |
-         (static_cast<uint32_t>(bytes[3]) << 24);
+inline uint32_t ReadLe32(const uint8_t *bytes) {
+  uint32_t value = 0;
+  std::memcpy(&value, bytes, sizeof(value));
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  return __builtin_bswap32(value);
+#else
+  return value;
+#endif
 }
 
-void WriteLe32(uint8_t *bytes, uint32_t value) {
-  bytes[0] = static_cast<uint8_t>(value);
-  bytes[1] = static_cast<uint8_t>(value >> 8);
-  bytes[2] = static_cast<uint8_t>(value >> 16);
-  bytes[3] = static_cast<uint8_t>(value >> 24);
+inline void WriteLe32(uint8_t *bytes, uint32_t value) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  value = __builtin_bswap32(value);
+#endif
+  std::memcpy(bytes, &value, sizeof(value));
 }
 
 bool IsBundledSkyTexture(const char *path) {
@@ -189,7 +192,11 @@ bool TranscodeKtx1Etc1(std::vector<uint8_t> *file) {
     if (image_size != expected_size || image_size > file->size() - offset) {
       return false;
     }
-    for (size_t block = 0; block < image_size / 8; ++block) {
+    const size_t total_blocks = image_size / 8;
+    for (size_t block = 0; block < total_blocks; ++block) {
+      if (block + 1 < total_blocks) {
+        __builtin_prefetch(file->data() + offset + (block + 1) * 8, 0, 3);
+      }
       std::array<uint8_t, 8> converted{};
       ConvertEtc1RgbBlockToBc1(file->data() + offset + block * 8,
                                converted.data());

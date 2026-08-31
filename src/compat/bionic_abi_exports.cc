@@ -982,6 +982,17 @@ int mocktail_pthread_spin_lock(pthread_spinlock_t* lock) {
     return 0;
   }
   int* word = mocktail_spin_word(lock);
+  // Adaptive spin: briefly spin using CPU pause instruction before sleeping on futex
+  for (int spin = 0; spin < 64; ++spin) {
+    if (__atomic_load_n(word, __ATOMIC_RELAXED) == static_cast<int>(kSpinUnlocked)) {
+      if (mocktail_pthread_spin_trylock(lock) == 0) {
+        return 0;
+      }
+    }
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#endif
+  }
   for (;;) {
     const int old_value = __atomic_exchange_n(
         word, static_cast<int>(kSpinContended), __ATOMIC_ACQUIRE);
