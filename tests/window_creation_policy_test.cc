@@ -32,6 +32,16 @@ TEST(WindowCreationPolicyTest, EnablesHighDensityForEveryWindowBackend) {
   }
 }
 
+TEST(WindowCreationPolicyTest, SynchronizesInitialDirectVulkanWaylandMap) {
+  EXPECT_TRUE(DirectVulkanWindowRequiresInitialSync("wayland"));
+}
+
+TEST(WindowCreationPolicyTest, DoesNotSynchronizeInitialX11Map) {
+  EXPECT_FALSE(DirectVulkanWindowRequiresInitialSync("x11"));
+  EXPECT_FALSE(DirectVulkanWindowRequiresInitialSync("dummy"));
+  EXPECT_FALSE(DirectVulkanWindowRequiresInitialSync(""));
+}
+
 }  // namespace
 }  // namespace window
 }  // namespace mocktail

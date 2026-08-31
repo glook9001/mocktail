@@ -4430,8 +4430,9 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
     return EXIT_FAILURE;
   }
   if (!runtime_config.theme_mode_valid()) {
-    std::cerr << "[FATAL] Invalid MOCKTAIL_THEME; expected system, light, or "
-                 "dark\n";
+    std::cerr
+        << "[FATAL] Invalid MOCKTAIL_THEME; expected roblox, system, light, "
+           "or dark\n";
     return EXIT_FAILURE;
   }
   setenv("MOCKTAIL_TOUCH_ENABLED_INTERNAL",
@@ -4713,13 +4714,35 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
   const SDL_SystemTheme system_theme =
       window_initialised ? SDL_GetSystemTheme() : SDL_SYSTEM_THEME_UNKNOWN;
   const bool system_dark_theme = system_theme == SDL_SYSTEM_THEME_DARK;
-  const bool dark_theme =
-      runtime_config.theme_mode() == "dark" ||
-      (runtime_config.theme_mode() == "system" && system_dark_theme);
-  setenv("MOCKTAIL_RESOLVED_THEME_INTERNAL", dark_theme ? "Dark" : "Light", 1);
   const char* app_storage_file =
       std::getenv("MOCKTAIL_APP_STORAGE_FILE_INTERNAL");
-  if (app_storage_file != nullptr) {
+  bool dark_theme = runtime_config.theme_mode() != "light";
+  bool roblox_theme_found = false;
+  if (runtime_config.theme_mode() == "system") {
+    dark_theme = system_dark_theme;
+  } else if (runtime_config.theme_mode() == "roblox" &&
+             app_storage_file != nullptr) {
+    const mocktail::runtime::RobloxThemeCacheResult saved_theme =
+        mocktail::runtime::ReadRobloxThemeCache(
+            app_storage_file, dependencies.account_identity().user_id);
+    if (!saved_theme) {
+      std::cerr << "[FATAL] Cannot read Roblox theme cache: "
+                << saved_theme.error << '\n';
+      return EXIT_FAILURE;
+    }
+    if (saved_theme.dark_theme.has_value()) {
+      dark_theme = *saved_theme.dark_theme;
+      roblox_theme_found = true;
+    }
+  }
+  setenv("MOCKTAIL_RESOLVED_THEME_INTERNAL", dark_theme ? "Dark" : "Light", 1);
+  if (runtime_config.theme_mode() == "roblox") {
+    std::cout << "  [theme] "
+              << (roblox_theme_found ? "Roblox saved theme="
+                                     : "Roblox theme missing; default=")
+              << (dark_theme ? "dark" : "light") << '\n'
+              << std::flush;
+  } else if (app_storage_file != nullptr) {
     std::string theme_error;
     if (!mocktail::runtime::ApplyRobloxThemeCacheOverride(
             app_storage_file, dependencies.account_identity().user_id,

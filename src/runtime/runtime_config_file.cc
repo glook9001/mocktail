@@ -301,8 +301,9 @@ bool ValidateAndMap(const ValueMap& yaml, ValueMap* environment,
     (*environment)["ROBLOX_LIB_PATH"] = *library;
   }
   if (const auto theme = value("appearance.theme"); theme.has_value()) {
-    if (*theme != "system" && *theme != "light" && *theme != "dark") {
-      *error = "appearance.theme must be system, light, or dark";
+    if (*theme != "roblox" && *theme != "system" && *theme != "light" &&
+        *theme != "dark") {
+      *error = "appearance.theme must be roblox, system, light, or dark";
       return false;
     }
     (*environment)["MOCKTAIL_THEME"] = *theme;

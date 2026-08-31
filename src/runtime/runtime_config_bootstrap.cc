@@ -50,7 +50,9 @@ runtime:
   # roblox_library: /absolute/path/to/libroblox.so
 
 appearance:
-  theme: system
+  # String (default: roblox): use Roblox's saved account theme. Supported
+  # overrides: dark, light, or system (follow the desktop color scheme).
+  theme: roblox
 
 graphics:
   # String (default: direct-vulkan): graphics backend. Use opengl on hardware

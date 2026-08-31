@@ -100,6 +100,7 @@ TEST(RuntimeConfigBootstrapTest, CreatesCompletePrivateFirstRunFile) {
   ASSERT_TRUE(loaded) << loaded.error;
   EXPECT_TRUE(loaded.file_loaded);
   EXPECT_EQ(loaded.config.graphics_backend(), GraphicsBackend::kVulkan);
+  EXPECT_EQ(loaded.config.theme_mode(), "roblox");
   EXPECT_EQ(loaded.config.frame_rate().mode, FrameRateLimitMode::kUnmanaged);
   EXPECT_EQ(loaded.config.vsync_mode(), "auto");
   EXPECT_FALSE(loaded.config.performance().multithreaded_rendering);
@@ -130,6 +131,9 @@ TEST(RuntimeConfigBootstrapTest,
            "profile.\ndevice: pc-windows-11",
            "# Boolean (default: false): start without a visible SDL "
            "window.\n  headless: false",
+           "# String (default: roblox): use Roblox's saved account theme. "
+           "Supported\n  # overrides: dark, light, or system (follow the "
+           "desktop color scheme).\n  theme: roblox",
            "# Recommended values: direct-vulkan, opengl, system, "
            "angle-vulkan.\n  backend: direct-vulkan",
            "# DFIntTaskSchedulerTargetFps without a whitelist.\n  "
@@ -257,6 +261,7 @@ TEST(RuntimeConfigFileTest, UsesDefaultsWhenFileDoesNotExist) {
   ASSERT_TRUE(loaded) << loaded.error;
   EXPECT_FALSE(loaded.file_loaded);
   EXPECT_EQ(loaded.config.graphics_backend(), GraphicsBackend::kVulkan);
+  EXPECT_EQ(loaded.config.theme_mode(), "roblox");
   EXPECT_EQ(loaded.config.roblox_library_path(), "rbx_bin/libroblox.so");
 }
 

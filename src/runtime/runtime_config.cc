@@ -185,7 +185,8 @@ RuntimeConfig RuntimeConfig::FromEnvironment(const Environment& environment) {
   config.window_.high_dpi = ReadBoolean(environment, "MOCKTAIL_WIN_HIGH_DPI",
                                         config.window_.high_dpi,
                                         &config.window_.high_dpi_valid);
-  config.theme_mode_ = environment.GetOr("MOCKTAIL_THEME", "system");
+  config.theme_mode_ =
+      environment.GetOr("MOCKTAIL_THEME", config.theme_mode_);
   const std::optional<std::string> configured_device =
       environment.Get("MOCKTAIL_DEVICE_PROFILE");
   const bool has_explicit_device =

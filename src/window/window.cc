@@ -1052,7 +1052,11 @@ bool Init(int width, int height, const char* title) {
     if (g_state.native_window == nullptr) {
       g_state.native_window = g_state.sdl_window;
     }
-    // Wayland reports undefined currentExtent until the window is mapped.
+    // Wayland reports undefined currentExtent until the window is mapped and
+    // receives its initial configure. X11 has no equivalent requirement, and
+    // SDL_SyncWindow can time out there while waiting for an unrelated WM
+    // state request (notably restored maximization) even though the native
+    // window is already valid for Vulkan WSI.
     if (!SDL_ShowWindow(g_state.sdl_window)) {
       fprintf(stderr, "  [window] SDL_ShowWindow failed: %s\n", SDL_GetError());
       SDL_DestroyWindow(g_state.sdl_window);
@@ -1062,8 +1066,13 @@ bool Init(int width, int height, const char* title) {
       g_state.initialised = false;
       return false;
     }
-    if (!SDL_SyncWindow(g_state.sdl_window)) {
-      fprintf(stderr, "  [window] SDL_SyncWindow failed: %s\n", SDL_GetError());
+    const char* active_video_driver = SDL_GetCurrentVideoDriver();
+    if (DirectVulkanWindowRequiresInitialSync(
+            active_video_driver != nullptr ? active_video_driver : "") &&
+        !SDL_SyncWindow(g_state.sdl_window)) {
+      fprintf(stderr,
+              "  [window] SDL_SyncWindow timed out waiting for the initial "
+              "Wayland configure\n");
       SDL_DestroyWindow(g_state.sdl_window);
       g_state.sdl_window = nullptr;
       SDL_Quit();
