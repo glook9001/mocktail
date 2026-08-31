@@ -228,8 +228,8 @@ void ConfigureHostDriverEnvironment() {
   // Expand shader disk cache to 2GB so compiled Vulkan/GL shaders are preserved across runs.
   set_if_unset("__GL_SHADER_DISK_CACHE", "1");
   set_if_unset("__GL_SHADER_DISK_CACHE_SIZE", "2147483648");
-  // Avoid busy-spin vblank waits on NVIDIA Linux driver.
-  set_if_unset("__GL_YIELD", "USLEEP");
+  // Eliminate vblank and frame-swap sleep delays on NVIDIA driver.
+  set_if_unset("__GL_YIELD", "NOTHING");
   set_if_unset("__GL_THREADED_OPTIMIZATIONS", "1");
 }
 

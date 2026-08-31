@@ -4155,7 +4155,7 @@ std::cerr << "  [engine] nativeAppBridgeV2InitWithParams recovered\n"
 
   if (context->run_start_lua_app_dm && context->native_start_lua_app_dm &&
       !IsEnabled("MOCKTAIL_START_LUA_APP_DM_AFTER_START_APP")) {
-    int delay_ms = GetEnvInt("MOCKTAIL_START_LUA_APP_DM_DELAY_MS", 1500);
+    int delay_ms = GetEnvInt("MOCKTAIL_START_LUA_APP_DM_DELAY_MS", 0);
     if (IsEnabled("MOCKTAIL_START_LUA_APP_DM_INLINE")) {
       if (delay_ms > 0) {
         std::cout << "  [engine] nativeAppBridgeStartLuaAppDM wait "
