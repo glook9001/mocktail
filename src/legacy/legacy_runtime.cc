@@ -1326,6 +1326,99 @@ void RegisterBionicMathWrappers() {
   }
 }
 
+struct CoreAffinityPolicy {
+  cpu_set_t render_cores;
+  cpu_set_t worker_cores;
+  bool active = false;
+};
+
+const CoreAffinityPolicy& GetCoreAffinityPolicy() {
+  static const CoreAffinityPolicy policy = [] {
+    CoreAffinityPolicy p{};
+    CPU_ZERO(&p.render_cores);
+    CPU_ZERO(&p.worker_cores);
+    const char* env_disabled = ::getenv("MOCKTAIL_AFFINITY_POLICY");
+    if (env_disabled != nullptr && (std::strcmp(env_disabled, "0") == 0 ||
+                                   std::strcmp(env_disabled, "off") == 0)) {
+      return p;
+    }
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {
+      return p;
+    }
+
+    int first_core_id = -1;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+      if (!CPU_ISSET(cpu, &allowed)) {
+        continue;
+      }
+      char path[64];
+      std::snprintf(path, sizeof(path),
+                    "/sys/devices/system/cpu/cpu%d/topology/core_id", cpu);
+      std::FILE* f = std::fopen(path, "r");
+      int cid = -1;
+      if (f != nullptr) {
+        (void)std::fscanf(f, "%d", &cid);
+        std::fclose(f);
+      }
+      if (first_core_id == -1 && cid != -1) {
+        first_core_id = cid;
+      }
+      if (cid == first_core_id && cid != -1) {
+        CPU_SET(cpu, &p.render_cores);
+      } else {
+        CPU_SET(cpu, &p.worker_cores);
+      }
+    }
+    int render_count = 0;
+    int worker_count = 0;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+      if (CPU_ISSET(cpu, &p.render_cores)) {
+        ++render_count;
+      }
+      if (CPU_ISSET(cpu, &p.worker_cores)) {
+        ++worker_count;
+      }
+    }
+    if (render_count > 0 && worker_count > 0) {
+      p.active = true;
+    }
+    return p;
+  }();
+  return policy;
+}
+
+extern "C" int mocktail_bionic_pthread_setname_np(pthread_t thread,
+                                                  const char* name) {
+  const int result = ::pthread_setname_np(thread, name);
+  if (result == 0 && name != nullptr && *name != '\0') {
+    const auto& policy = GetCoreAffinityPolicy();
+    if (policy.active) {
+      if (std::strstr(name, "Render") != nullptr ||
+          std::strstr(name, "Vulkan") != nullptr ||
+          std::strstr(name, "Present") != nullptr ||
+          std::strstr(name, "Graphics") != nullptr ||
+          std::strstr(name, "Main") != nullptr ||
+          std::strstr(name, "Display") != nullptr ||
+          std::strstr(name, "SDL") != nullptr) {
+        (void)::pthread_setaffinity_np(thread, sizeof(cpu_set_t),
+                                       &policy.render_cores);
+      } else if (std::strstr(name, "Worker") != nullptr ||
+                 std::strstr(name, "Job") != nullptr ||
+                 std::strstr(name, "Http") != nullptr ||
+                 std::strstr(name, "Asset") != nullptr ||
+                 std::strstr(name, "Audio") != nullptr ||
+                 std::strstr(name, "Physics") != nullptr ||
+                 std::strstr(name, "TaskScheduler") != nullptr) {
+        (void)::pthread_setaffinity_np(thread, sizeof(cpu_set_t),
+                                       &policy.worker_cores);
+      }
+    }
+  }
+  return result;
+}
+
 void RegisterBionicDnsWrappers() {
   linker::RegisterSymbol("getaddrinfo",
                          reinterpret_cast<void*>(mocktail_getaddrinfo));
@@ -5328,7 +5421,6 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
       "pthread_getspecific",
       "pthread_setspecific",
       "pthread_sigmask",
-      "pthread_setname_np",
 
       // Standard C library functions resolved from host libc.
       "strcmp",
@@ -5642,6 +5734,12 @@ int mocktail::legacy::Run(const runtime::CommandLineOptions& options,
   linker::RegisterSymbol(
       "pthread_create",
       reinterpret_cast<void*>(mocktail_bionic_pthread_create));
+  linker::RegisterSymbol(
+      "pthread_setname_np",
+      reinterpret_cast<void*>(mocktail_bionic_pthread_setname_np));
+  linker::RegisterSyntheticSymbol(
+      "libc.so", "pthread_setname_np",
+      reinterpret_cast<void*>(mocktail_bionic_pthread_setname_np));
   linker::RegisterSymbol("abort", reinterpret_cast<void*>(mocktail_abort));
   linker::RegisterSymbol("__stack_chk_fail", reinterpret_cast<void*>(mocktail_recover_stack_chk_fail));
   (void)registered;
