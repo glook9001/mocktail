@@ -326,7 +326,8 @@ bool CloneOrCopyFile(const std::filesystem::path& source,
 bool CopyTree(const std::filesystem::path& source,
               const std::filesystem::path& destination, std::string* error) {
   std::error_code filesystem_error;
-  if (!std::filesystem::create_directory(destination, filesystem_error)) {
+  if (!std::filesystem::create_directories(destination, filesystem_error) &&
+      !std::filesystem::exists(destination, filesystem_error)) {
     *error = "cannot create immutable payload staging directory";
     return false;
   }
