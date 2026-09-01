@@ -1,5 +1,6 @@
 #include "libc_shim/libc_shim.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -8,10 +9,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem>
 #include <iostream>
 #include <limits.h>
 #include <unordered_map>
 #include <unistd.h>
+#include <vector>
 
 namespace libc_shim {
 
@@ -136,7 +139,64 @@ bool EnsureDirectory(const std::string& path) {
   return true;
 }
 
+void PruneStaleStorageAndOrphanedFolders(const std::string& data_root) {
+  std::error_code ec;
+  if (!std::filesystem::exists(data_root, ec)) {
+    return;
+  }
+  // 1. Remove orphaned ContentProvider_* session directories left behind from previous runs.
+  for (const auto& entry : std::filesystem::directory_iterator(data_root, ec)) {
+    if (ec) break;
+    if (entry.is_directory(ec)) {
+      const std::string filename = entry.path().filename().string();
+      if (filename.rfind("ContentProvider_", 0) == 0 &&
+          filename != "ContentProvider_2") {
+        std::filesystem::remove_all(entry.path(), ec);
+      }
+    }
+  }
+
+  // 2. Cap rbx-storage cache folders to prevent runaway disk bloat and heavy directory indexing.
+  const std::array<std::string, 4> storage_paths = {{
+      data_root + "/rbx-storage",
+      data_root + "/cache/rbx-storage",
+      data_root + "/appData/rbx-storage",
+      data_root + "/files/appData/rbx-storage",
+  }};
+  constexpr uintmax_t kMaxStorageBytes = 256 * 1024 * 1024;  // 256 MB cap
+  for (const auto& path_str : storage_paths) {
+    if (!std::filesystem::exists(path_str, ec)) continue;
+    uintmax_t total_bytes = 0;
+    std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>>
+        files;
+    for (const auto& entry :
+         std::filesystem::recursive_directory_iterator(path_str, ec)) {
+      if (ec) break;
+      if (entry.is_regular_file(ec)) {
+        const auto size = entry.file_size(ec);
+        if (!ec) {
+          total_bytes += size;
+          files.emplace_back(entry.last_write_time(ec), entry.path());
+        }
+      }
+    }
+    if (total_bytes > kMaxStorageBytes) {
+      std::sort(files.begin(), files.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+      for (const auto& file_info : files) {
+        if (total_bytes <= kMaxStorageBytes / 2) break;  // Prune down to 128 MB
+        const auto file_sz =
+            std::filesystem::file_size(file_info.second, ec);
+        if (!ec && std::filesystem::remove(file_info.second, ec)) {
+          total_bytes -= file_sz;
+        }
+      }
+    }
+  }
+}
+
 void EnsureDefaultDataLayout(const std::string& data_root) {
+  PruneStaleStorageAndOrphanedFolders(data_root);
   EnsureDirectory(data_root);
   EnsureDirectory(data_root + "/files");
   EnsureDirectory(data_root + "/cache");
