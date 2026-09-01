@@ -1172,6 +1172,33 @@ float mocktail_fmaxf(float a, float b) noexcept { return __builtin_fmaxf(a, b); 
 float mocktail_fmaf(float x, float y, float z) noexcept { return __builtin_fmaf(x, y, z); }
 float mocktail_hypotf(float x, float y) noexcept { return __builtin_hypotf(x, y); }
 float mocktail_sqrtf(float x) noexcept { return __builtin_sqrtf(x); }
+float mocktail_cbrtf(float x) noexcept { return __builtin_cbrtf(x); }
+float mocktail_sinf(float x) noexcept { return __builtin_sinf(x); }
+float mocktail_cosf(float x) noexcept { return __builtin_cosf(x); }
+float mocktail_tanf(float x) noexcept { return __builtin_tanf(x); }
+float mocktail_asinf(float x) noexcept { return __builtin_asinf(x); }
+float mocktail_acosf(float x) noexcept { return __builtin_acosf(x); }
+float mocktail_atanf(float x) noexcept { return __builtin_atanf(x); }
+float mocktail_atan2f(float y, float x) noexcept { return __builtin_atan2f(y, x); }
+float mocktail_sinhf(float x) noexcept { return __builtin_sinhf(x); }
+float mocktail_coshf(float x) noexcept { return __builtin_coshf(x); }
+float mocktail_tanhf(float x) noexcept { return __builtin_tanhf(x); }
+float mocktail_expf(float x) noexcept { return __builtin_expf(x); }
+float mocktail_exp2f(float x) noexcept { return __builtin_exp2f(x); }
+float mocktail_expm1f(float x) noexcept { return __builtin_expm1f(x); }
+float mocktail_logf(float x) noexcept { return __builtin_logf(x); }
+float mocktail_log2f(float x) noexcept { return __builtin_log2f(x); }
+float mocktail_log10f(float x) noexcept { return __builtin_log10f(x); }
+float mocktail_log1pf(float x) noexcept { return __builtin_log1pf(x); }
+float mocktail_powf(float x, float y) noexcept { return __builtin_powf(x, y); }
+float mocktail_copysignf(float x, float y) noexcept { return __builtin_copysignf(x, y); }
+float mocktail_fdimf(float x, float y) noexcept { return __builtin_fdimf(x, y); }
+float mocktail_fmodf(float x, float y) noexcept { return __builtin_fmodf(x, y); }
+float mocktail_remainderf(float x, float y) noexcept { return __builtin_remainderf(x, y); }
+float mocktail_ldexpf(float x, int exp) noexcept { return __builtin_ldexpf(x, exp); }
+void mocktail_sincosf(float x, float* sinp, float* cosp) noexcept {
+  __builtin_sincosf(x, sinp, cosp);
+}
 
 double mocktail_floor(double x) noexcept { return __builtin_floor(x); }
 double mocktail_ceil(double x) noexcept { return __builtin_ceil(x); }
@@ -1183,31 +1210,120 @@ double mocktail_fmax(double a, double b) noexcept { return __builtin_fmax(a, b);
 double mocktail_fma(double x, double y, double z) noexcept { return __builtin_fma(x, y, z); }
 double mocktail_hypot(double x, double y) noexcept { return __builtin_hypot(x, y); }
 double mocktail_sqrt(double x) noexcept { return __builtin_sqrt(x); }
+double mocktail_cbrt(double x) noexcept { return __builtin_cbrt(x); }
+double mocktail_sin(double x) noexcept { return __builtin_sin(x); }
+double mocktail_cos(double x) noexcept { return __builtin_cos(x); }
+double mocktail_tan(double x) noexcept { return __builtin_tan(x); }
+double mocktail_asin(double x) noexcept { return __builtin_asin(x); }
+double mocktail_acos(double x) noexcept { return __builtin_acos(x); }
+double mocktail_atan(double x) noexcept { return __builtin_atan(x); }
+double mocktail_atan2(double y, double x) noexcept { return __builtin_atan2(y, x); }
+double mocktail_sinh(double x) noexcept { return __builtin_sinh(x); }
+double mocktail_cosh(double x) noexcept { return __builtin_cosh(x); }
+double mocktail_tanh(double x) noexcept { return __builtin_tanh(x); }
+double mocktail_exp(double x) noexcept { return __builtin_exp(x); }
+double mocktail_exp2(double x) noexcept { return __builtin_exp2(x); }
+double mocktail_expm1(double x) noexcept { return __builtin_expm1(x); }
+double mocktail_log(double x) noexcept { return __builtin_log(x); }
+double mocktail_log2(double x) noexcept { return __builtin_log2(x); }
+double mocktail_log10(double x) noexcept { return __builtin_log10(x); }
+double mocktail_log1p(double x) noexcept { return __builtin_log1p(x); }
+double mocktail_pow(double x, double y) noexcept { return __builtin_pow(x, y); }
+double mocktail_copysign(double x, double y) noexcept { return __builtin_copysign(x, y); }
+double mocktail_fdim(double x, double y) noexcept { return __builtin_fdim(x, y); }
+double mocktail_fmod(double x, double y) noexcept { return __builtin_fmod(x, y); }
+double mocktail_remainder(double x, double y) noexcept { return __builtin_remainder(x, y); }
+double mocktail_ldexp(double x, int exp) noexcept { return __builtin_ldexp(x, exp); }
+void mocktail_sincos(double x, double* sinp, double* cosp) noexcept {
+  __builtin_sincos(x, sinp, cosp);
+}
 
 }  // extern "C"
 
 void RegisterBionicMathWrappers() {
-  linker::RegisterSymbol("floorf", reinterpret_cast<void*>(mocktail_floorf));
-  linker::RegisterSymbol("ceilf", reinterpret_cast<void*>(mocktail_ceilf));
-  linker::RegisterSymbol("truncf", reinterpret_cast<void*>(mocktail_truncf));
-  linker::RegisterSymbol("roundf", reinterpret_cast<void*>(mocktail_roundf));
-  linker::RegisterSymbol("fabsf", reinterpret_cast<void*>(mocktail_fabsf));
-  linker::RegisterSymbol("fminf", reinterpret_cast<void*>(mocktail_fminf));
-  linker::RegisterSymbol("fmaxf", reinterpret_cast<void*>(mocktail_fmaxf));
-  linker::RegisterSymbol("fmaf", reinterpret_cast<void*>(mocktail_fmaf));
-  linker::RegisterSymbol("hypotf", reinterpret_cast<void*>(mocktail_hypotf));
-  linker::RegisterSymbol("sqrtf", reinterpret_cast<void*>(mocktail_sqrtf));
+  struct MathSymbolEntry {
+    const char* name;
+    void* address;
+  };
 
-  linker::RegisterSymbol("floor", reinterpret_cast<void*>(mocktail_floor));
-  linker::RegisterSymbol("ceil", reinterpret_cast<void*>(mocktail_ceil));
-  linker::RegisterSymbol("trunc", reinterpret_cast<void*>(mocktail_trunc));
-  linker::RegisterSymbol("round", reinterpret_cast<void*>(mocktail_round));
-  linker::RegisterSymbol("fabs", reinterpret_cast<void*>(mocktail_fabs));
-  linker::RegisterSymbol("fmin", reinterpret_cast<void*>(mocktail_fmin));
-  linker::RegisterSymbol("fmax", reinterpret_cast<void*>(mocktail_fmax));
-  linker::RegisterSymbol("fma", reinterpret_cast<void*>(mocktail_fma));
-  linker::RegisterSymbol("hypot", reinterpret_cast<void*>(mocktail_hypot));
-  linker::RegisterSymbol("sqrt", reinterpret_cast<void*>(mocktail_sqrt));
+  static const MathSymbolEntry kMathSymbols[] = {
+      {"floorf", reinterpret_cast<void*>(mocktail_floorf)},
+      {"ceilf", reinterpret_cast<void*>(mocktail_ceilf)},
+      {"truncf", reinterpret_cast<void*>(mocktail_truncf)},
+      {"roundf", reinterpret_cast<void*>(mocktail_roundf)},
+      {"fabsf", reinterpret_cast<void*>(mocktail_fabsf)},
+      {"fminf", reinterpret_cast<void*>(mocktail_fminf)},
+      {"fmaxf", reinterpret_cast<void*>(mocktail_fmaxf)},
+      {"fmaf", reinterpret_cast<void*>(mocktail_fmaf)},
+      {"hypotf", reinterpret_cast<void*>(mocktail_hypotf)},
+      {"sqrtf", reinterpret_cast<void*>(mocktail_sqrtf)},
+      {"cbrtf", reinterpret_cast<void*>(mocktail_cbrtf)},
+      {"sinf", reinterpret_cast<void*>(mocktail_sinf)},
+      {"cosf", reinterpret_cast<void*>(mocktail_cosf)},
+      {"tanf", reinterpret_cast<void*>(mocktail_tanf)},
+      {"asinf", reinterpret_cast<void*>(mocktail_asinf)},
+      {"acosf", reinterpret_cast<void*>(mocktail_acosf)},
+      {"atanf", reinterpret_cast<void*>(mocktail_atanf)},
+      {"atan2f", reinterpret_cast<void*>(mocktail_atan2f)},
+      {"sinhf", reinterpret_cast<void*>(mocktail_sinhf)},
+      {"coshf", reinterpret_cast<void*>(mocktail_coshf)},
+      {"tanhf", reinterpret_cast<void*>(mocktail_tanhf)},
+      {"expf", reinterpret_cast<void*>(mocktail_expf)},
+      {"exp2f", reinterpret_cast<void*>(mocktail_exp2f)},
+      {"expm1f", reinterpret_cast<void*>(mocktail_expm1f)},
+      {"logf", reinterpret_cast<void*>(mocktail_logf)},
+      {"log2f", reinterpret_cast<void*>(mocktail_log2f)},
+      {"log10f", reinterpret_cast<void*>(mocktail_log10f)},
+      {"log1pf", reinterpret_cast<void*>(mocktail_log1pf)},
+      {"powf", reinterpret_cast<void*>(mocktail_powf)},
+      {"copysignf", reinterpret_cast<void*>(mocktail_copysignf)},
+      {"fdimf", reinterpret_cast<void*>(mocktail_fdimf)},
+      {"fmodf", reinterpret_cast<void*>(mocktail_fmodf)},
+      {"remainderf", reinterpret_cast<void*>(mocktail_remainderf)},
+      {"ldexpf", reinterpret_cast<void*>(mocktail_ldexpf)},
+      {"sincosf", reinterpret_cast<void*>(mocktail_sincosf)},
+
+      {"floor", reinterpret_cast<void*>(mocktail_floor)},
+      {"ceil", reinterpret_cast<void*>(mocktail_ceil)},
+      {"trunc", reinterpret_cast<void*>(mocktail_trunc)},
+      {"round", reinterpret_cast<void*>(mocktail_round)},
+      {"fabs", reinterpret_cast<void*>(mocktail_fabs)},
+      {"fmin", reinterpret_cast<void*>(mocktail_fmin)},
+      {"fmax", reinterpret_cast<void*>(mocktail_fmax)},
+      {"fma", reinterpret_cast<void*>(mocktail_fma)},
+      {"hypot", reinterpret_cast<void*>(mocktail_hypot)},
+      {"sqrt", reinterpret_cast<void*>(mocktail_sqrt)},
+      {"cbrt", reinterpret_cast<void*>(mocktail_cbrt)},
+      {"sin", reinterpret_cast<void*>(mocktail_sin)},
+      {"cos", reinterpret_cast<void*>(mocktail_cos)},
+      {"tan", reinterpret_cast<void*>(mocktail_tan)},
+      {"asin", reinterpret_cast<void*>(mocktail_asin)},
+      {"acos", reinterpret_cast<void*>(mocktail_acos)},
+      {"atan", reinterpret_cast<void*>(mocktail_atan)},
+      {"atan2", reinterpret_cast<void*>(mocktail_atan2)},
+      {"sinh", reinterpret_cast<void*>(mocktail_sinh)},
+      {"cosh", reinterpret_cast<void*>(mocktail_cosh)},
+      {"tanh", reinterpret_cast<void*>(mocktail_tanh)},
+      {"exp", reinterpret_cast<void*>(mocktail_exp)},
+      {"exp2", reinterpret_cast<void*>(mocktail_exp2)},
+      {"expm1", reinterpret_cast<void*>(mocktail_expm1)},
+      {"log", reinterpret_cast<void*>(mocktail_log)},
+      {"log2", reinterpret_cast<void*>(mocktail_log2)},
+      {"log10", reinterpret_cast<void*>(mocktail_log10)},
+      {"log1p", reinterpret_cast<void*>(mocktail_log1p)},
+      {"pow", reinterpret_cast<void*>(mocktail_pow)},
+      {"copysign", reinterpret_cast<void*>(mocktail_copysign)},
+      {"fdim", reinterpret_cast<void*>(mocktail_fdim)},
+      {"fmod", reinterpret_cast<void*>(mocktail_fmod)},
+      {"remainder", reinterpret_cast<void*>(mocktail_remainder)},
+      {"ldexp", reinterpret_cast<void*>(mocktail_ldexp)},
+      {"sincos", reinterpret_cast<void*>(mocktail_sincos)},
+  };
+
+  for (const auto& entry : kMathSymbols) {
+    linker::RegisterSymbol(entry.name, entry.address);
+    linker::RegisterSyntheticSymbol("libm.so", entry.name, entry.address);
+  }
 }
 
 void RegisterBionicDnsWrappers() {

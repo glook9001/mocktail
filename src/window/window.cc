@@ -2060,11 +2060,16 @@ bool PumpEvents() {
     }
   };
 
-  SDL_Event event;
+  constexpr int kEventBatchSize = 16;
+  std::array<SDL_Event, kEventBatchSize> events;
+  int num_events = 0;
   // Pump events immediately on every tick for zero-latency input ingestion.
   SDL_PumpEvents();
-  while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST,
-                        SDL_EVENT_LAST) > 0) {
+  while ((num_events = SDL_PeepEvents(events.data(), kEventBatchSize,
+                                      SDL_GETEVENT, SDL_EVENT_FIRST,
+                                      SDL_EVENT_LAST)) > 0) {
+    for (int event_idx = 0; event_idx < num_events; ++event_idx) {
+      const SDL_Event& event = events[event_idx];
     if (event.type != SDL_EVENT_MOUSE_MOTION) {
       flush_motion();
     }
@@ -2221,6 +2226,7 @@ bool PumpEvents() {
             g_text_input_owner != nullptr && g_text_input_owner->active())) {
       fprintf(stderr,
               "  [input] SDL right-button pointer capture update failed\n");
+    }
     }
   }
   flush_motion();

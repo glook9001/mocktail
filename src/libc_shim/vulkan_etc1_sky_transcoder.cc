@@ -62,7 +62,7 @@ uint8_t Expand5(int value) {
 // sell copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to inclusion of this notice. THE SOFTWARE IS
 // PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
-void DecodeEtc1RgbBlock(const uint8_t *data, std::array<Rgb, 16> *output) {
+inline void DecodeEtc1RgbBlock(const uint8_t *data, std::array<Rgb, 16> *output) {
   constexpr std::array<uint8_t, 16> kWriteOrder = {
       0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15,
   };
