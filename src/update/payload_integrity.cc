@@ -137,6 +137,9 @@ std::string HashRegularFile(const std::filesystem::path& path,
     return {};
   }
   std::vector<unsigned char> buffer(256U * 1024U);
+#if defined(__linux__)
+  posix_fadvise(descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
   while (true) {
     const ssize_t bytes = read(descriptor, buffer.data(), buffer.size());
     if (bytes == 0) break;
@@ -152,6 +155,9 @@ std::string HashRegularFile(const std::filesystem::path& path,
       return {};
     }
   }
+#if defined(__linux__)
+  posix_fadvise(descriptor, 0, 0, POSIX_FADV_DONTNEED);
+#endif
   close(descriptor);
   const std::string hex = digest.FinalHex();
   if (hex.empty()) *error = "cannot finalise the hash of " + path.string();
