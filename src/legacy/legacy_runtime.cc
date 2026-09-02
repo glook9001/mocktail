@@ -12,11 +12,13 @@
 #include <iomanip>
 #include <iostream>
 #include <csignal>
+#include <malloc.h>
 #include <netdb.h>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <poll.h>
+#include <thread>
 #include <unordered_map>
 #include <pthread.h>
 #include <setjmp.h>
@@ -1389,8 +1391,24 @@ const CoreAffinityPolicy& GetCoreAffinityPolicy() {
   return policy;
 }
 
+void StartPeriodicMemoryCompactor() {
+  static std::atomic<bool> started{false};
+  if (started.exchange(true)) return;
+  std::thread compactor([] {
+    ::pthread_setname_np(::pthread_self(), "MemCompactor");
+    while (true) {
+      std::this_thread::sleep_for(std::chrono::seconds(10));
+#if defined(__GLIBC__)
+      malloc_trim(0);
+#endif
+    }
+  });
+  compactor.detach();
+}
+
 extern "C" int mocktail_bionic_pthread_setname_np(pthread_t thread,
                                                   const char* name) {
+  StartPeriodicMemoryCompactor();
   const int result = ::pthread_setname_np(thread, name);
   if (result == 0 && name != nullptr && *name != '\0') {
     const auto& policy = GetCoreAffinityPolicy();
