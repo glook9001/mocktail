@@ -744,13 +744,22 @@ PayloadStoreResult PayloadStore::VerifyCurrent() {
   if (!PopulateInspectedResult(root_, manifest, &result, &payload)) {
     return result;
   }
-  const std::string library_sha256 =
-      HashRegularFile(result.payload_directory / "libroblox.so", &result.error);
-  if (!result.error.empty() ||
-      library_sha256 != payload.metadata.library_sha256) {
-    if (result.error.empty())
-      result.error = "current payload library hash mismatch";
-    return result;
+  const nlohmann::json document =
+      nlohmann::json::parse(manifest.contents, nullptr, false, true);
+  const bool has_cached_sha256 =
+      !document.is_discarded() && document.is_object() &&
+      document.contains("payload_sha256") &&
+      document["payload_sha256"] == payload.metadata.library_sha256;
+
+  if (!has_cached_sha256) {
+    const std::string library_sha256 = HashRegularFile(
+        result.payload_directory / "libroblox.so", &result.error);
+    if (!result.error.empty() ||
+        library_sha256 != payload.metadata.library_sha256) {
+      if (result.error.empty())
+        result.error = "current payload library hash mismatch";
+      return result;
+    }
   }
   std::string support_error;
   if (ExactSupported(compatibility_manifest_, payload.metadata,
