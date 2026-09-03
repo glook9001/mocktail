@@ -11,7 +11,6 @@ enum class VideoDriverChoice {
   kSdlDefault,
   kWayland,
   kX11,
-  kNvidiaDirectVulkanX11,
 };
 
 struct VideoDriverPolicyInput {
@@ -21,14 +20,13 @@ struct VideoDriverPolicyInput {
   bool prefer_wayland = true;
   bool has_wayland_session = false;
   bool has_x11_display = false;
-  bool uses_direct_vulkan = false;
-  bool has_nvidia_kernel_driver = false;
 };
 
 // Resolves the SDL video backend before SDL_Init. An explicit SDL driver is
-// always authoritative. NVIDIA's direct Vulkan WSI uses X11/XWayland by
-// default when both display transports are available because a blocked native
-// Wayland present cannot be cancelled without violating VkQueue ownership.
+// always authoritative. A Wayland session always resolves to native Wayland -
+// XWayland is not supported. Otherwise falls back to SDL default (native X11
+// on an X11-only session, etc.). If Vulkan WSI is unavailable the graphics
+// backend falls back to OpenGL, not to a different video driver.
 VideoDriverChoice ResolveVideoDriverChoice(const VideoDriverPolicyInput& input);
 
 const char* VideoDriverChoiceName(VideoDriverChoice choice);

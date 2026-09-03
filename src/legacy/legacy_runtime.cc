@@ -1383,7 +1383,10 @@ const CoreAffinityPolicy& GetCoreAffinityPolicy() {
         ++worker_count;
       }
     }
-    if (render_count > 0 && worker_count > 0) {
+    // Only activate CPU core pinning if the system has at least 4 physical cores.
+    // On dual-core / 4-thread processors, pinning Render + Main to Core 0 starves
+    // the pipeline and causes heavy stutter.
+    if (render_count > 0 && worker_count > 0 && (render_count + worker_count) >= 8) {
       p.active = true;
     }
     return p;
@@ -1391,24 +1394,8 @@ const CoreAffinityPolicy& GetCoreAffinityPolicy() {
   return policy;
 }
 
-void StartPeriodicMemoryCompactor() {
-  static std::atomic<bool> started{false};
-  if (started.exchange(true)) return;
-  std::thread compactor([] {
-    ::pthread_setname_np(::pthread_self(), "MemCompactor");
-    while (true) {
-      std::this_thread::sleep_for(std::chrono::seconds(10));
-#if defined(__GLIBC__)
-      malloc_trim(0);
-#endif
-    }
-  });
-  compactor.detach();
-}
-
 extern "C" int mocktail_bionic_pthread_setname_np(pthread_t thread,
                                                   const char* name) {
-  StartPeriodicMemoryCompactor();
   const int result = ::pthread_setname_np(thread, name);
   if (result == 0 && name != nullptr && *name != '\0') {
     const auto& policy = GetCoreAffinityPolicy();

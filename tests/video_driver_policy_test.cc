@@ -19,14 +19,19 @@ VideoDriverPolicyInput NvidiaWaylandDirectVulkan() {
   input.prefer_wayland = true;
   input.has_wayland_session = true;
   input.has_x11_display = true;
-  input.uses_direct_vulkan = true;
-  input.has_nvidia_kernel_driver = true;
   return input;
 }
 
-TEST(VideoDriverPolicyTest, UsesXwaylandForNvidiaDirectVulkanByDefault) {
+TEST(VideoDriverPolicyTest, PrefersNativeWaylandForNvidiaDirectVulkanByDefault) {
   EXPECT_EQ(ResolveVideoDriverChoice(NvidiaWaylandDirectVulkan()),
-            VideoDriverChoice::kNvidiaDirectVulkanX11);
+            VideoDriverChoice::kWayland);
+}
+
+TEST(VideoDriverPolicyTest, NeverUsesXwaylandBridgeOnWaylandSession) {
+  VideoDriverPolicyInput input = NvidiaWaylandDirectVulkan();
+  input.force_x11 = true;
+  // Even with X11 available/forced, a Wayland session stays native.
+  EXPECT_EQ(ResolveVideoDriverChoice(input), VideoDriverChoice::kWayland);
 }
 
 TEST(VideoDriverPolicyTest, ExplicitSdlDriverRemainsAuthoritative) {
@@ -36,18 +41,18 @@ TEST(VideoDriverPolicyTest, ExplicitSdlDriverRemainsAuthoritative) {
   EXPECT_EQ(ResolveVideoDriverChoice(input), VideoDriverChoice::kSdlDefault);
 }
 
-TEST(VideoDriverPolicyTest, ForceWaylandOverridesNvidiaFallback) {
+TEST(VideoDriverPolicyTest, ForceWaylandKeepsNativeWayland) {
   VideoDriverPolicyInput input = NvidiaWaylandDirectVulkan();
   input.force_wayland = true;
 
   EXPECT_EQ(ResolveVideoDriverChoice(input), VideoDriverChoice::kWayland);
 }
 
-TEST(VideoDriverPolicyTest, ForceX11WinsForAvailableDisplay) {
+TEST(VideoDriverPolicyTest, ForceX11OnlyAppliesWithoutWaylandSession) {
   VideoDriverPolicyInput input;
   input.force_x11 = true;
   input.prefer_wayland = true;
-  input.has_wayland_session = true;
+  input.has_wayland_session = false;
   input.has_x11_display = true;
 
   EXPECT_EQ(ResolveVideoDriverChoice(input), VideoDriverChoice::kX11);
@@ -55,36 +60,29 @@ TEST(VideoDriverPolicyTest, ForceX11WinsForAvailableDisplay) {
 
 TEST(VideoDriverPolicyTest, KeepsWaylandForNonNvidiaAndNonDirectBackends) {
   VideoDriverPolicyInput input = NvidiaWaylandDirectVulkan();
-  input.uses_direct_vulkan = false;
 
-  EXPECT_EQ(ResolveVideoDriverChoice(input), VideoDriverChoice::kWayland);
-
-  input.uses_direct_vulkan = true;
-  input.has_nvidia_kernel_driver = false;
   EXPECT_EQ(ResolveVideoDriverChoice(input), VideoDriverChoice::kWayland);
 }
 
-TEST(VideoDriverPolicyTest, KeepsWaylandWhenXwaylandIsUnavailable) {
+TEST(VideoDriverPolicyTest, KeepsWaylandWhenOnlyWaylandIsAvailable) {
   VideoDriverPolicyInput input = NvidiaWaylandDirectVulkan();
   input.has_x11_display = false;
 
   EXPECT_EQ(ResolveVideoDriverChoice(input), VideoDriverChoice::kWayland);
 }
 
-TEST(VideoDriverPolicyTest, UsesSdlDefaultWhenWaylandPreferenceIsDisabled) {
+TEST(VideoDriverPolicyTest, WaylandSessionAlwaysResolvesToNativeWayland) {
   VideoDriverPolicyInput input;
   input.prefer_wayland = false;
   input.has_wayland_session = true;
   input.has_x11_display = true;
 
-  EXPECT_EQ(ResolveVideoDriverChoice(input), VideoDriverChoice::kSdlDefault);
+  EXPECT_EQ(ResolveVideoDriverChoice(input), VideoDriverChoice::kWayland);
 }
 
 TEST(VideoDriverPolicyTest, NamesOnlySelectedDrivers) {
   EXPECT_STREQ(VideoDriverChoiceName(VideoDriverChoice::kWayland), "wayland");
   EXPECT_STREQ(VideoDriverChoiceName(VideoDriverChoice::kX11), "x11");
-  EXPECT_STREQ(VideoDriverChoiceName(VideoDriverChoice::kNvidiaDirectVulkanX11),
-               "x11");
   EXPECT_EQ(VideoDriverChoiceName(VideoDriverChoice::kSdlDefault), nullptr);
 }
 

@@ -11,6 +11,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <sys/prctl.h>
+#include <sys/resource.h>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -523,6 +525,14 @@ int main(int argc, char* argv[]) {
     case mocktail::runtime::GameModeSessionState::kStopped:
     case mocktail::runtime::GameModeSessionState::kStopFailed:
       break;
+  }
+  if (command_line.options.mode == mocktail::runtime::CommandMode::kRun) {
+#if defined(__linux__) && defined(PR_SET_TIMERSLACK)
+    // Reduce kernel timer slack to 1ns to avoid frame-pacer oversleeping on 2-core CPUs
+    (void)::prctl(PR_SET_TIMERSLACK, 1UL, 0UL, 0UL, 0UL);
+#endif
+    // Request elevated nice priority (-5) if unprivileged permissions allow
+    (void)::setpriority(PRIO_PROCESS, 0, -5);
   }
   if (command_line.options.mode == mocktail::runtime::CommandMode::kRun) {
     failure_dialog = mocktail::runtime::FailureDialogMonitor::Start(

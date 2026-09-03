@@ -12,6 +12,11 @@
 #include <filesystem>
 #include <iostream>
 #include <limits.h>
+#include <string_view>
+#include <sys/syscall.h>
+#if defined(__linux__)
+#include <linux/openat2.h>
+#endif
 #include <unordered_map>
 #include <unistd.h>
 #include <vector>
@@ -20,7 +25,26 @@ namespace libc_shim {
 
 namespace {
 
+struct PathMappingEntry {
+  std::string android_prefix;
+  std::string host_prefix;
+};
+
 std::unordered_map<std::string, std::string> g_path_mappings;
+std::vector<PathMappingEntry> g_sorted_mappings;
+
+void RebuildSortedMappingsLocked() {
+  g_sorted_mappings.clear();
+  g_sorted_mappings.reserve(g_path_mappings.size());
+  for (const auto& [android_prefix, host_prefix] : g_path_mappings) {
+    g_sorted_mappings.push_back({android_prefix, host_prefix});
+  }
+  // Sort longest prefix first so the first match is always the longest match.
+  std::sort(g_sorted_mappings.begin(), g_sorted_mappings.end(),
+            [](const PathMappingEntry& a, const PathMappingEntry& b) {
+              return a.android_prefix.size() > b.android_prefix.size();
+            });
+}
 
 bool g_installed = false;
 std::atomic<GuestAllocator> g_guest_allocator{nullptr};
@@ -66,7 +90,7 @@ std::string DefaultDataRoot() {
   return RuntimeRoot() + "/data";
 }
 
-bool PrefixMatchesPath(const std::string& path, const std::string& prefix) {
+bool PrefixMatchesPath(std::string_view path, std::string_view prefix) {
   if (path.size() < prefix.size()) {
     return false;
   }
@@ -144,7 +168,7 @@ void PruneStaleStorageAndOrphanedFolders(const std::string& data_root) {
   if (!std::filesystem::exists(data_root, ec)) {
     return;
   }
-  // 1. Remove orphaned ContentProvider_* session directories left behind from previous runs.
+  // Remove orphaned ContentProvider_* session directories left behind from previous runs.
   for (const auto& entry : std::filesystem::directory_iterator(data_root, ec)) {
     if (ec) break;
     if (entry.is_directory(ec)) {
@@ -152,44 +176,6 @@ void PruneStaleStorageAndOrphanedFolders(const std::string& data_root) {
       if (filename.rfind("ContentProvider_", 0) == 0 &&
           filename != "ContentProvider_2") {
         std::filesystem::remove_all(entry.path(), ec);
-      }
-    }
-  }
-
-  // 2. Cap rbx-storage cache folders to prevent runaway disk bloat and heavy directory indexing.
-  const std::array<std::string, 4> storage_paths = {{
-      data_root + "/rbx-storage",
-      data_root + "/cache/rbx-storage",
-      data_root + "/appData/rbx-storage",
-      data_root + "/files/appData/rbx-storage",
-  }};
-  constexpr uintmax_t kMaxStorageBytes = 256 * 1024 * 1024;  // 256 MB cap
-  for (const auto& path_str : storage_paths) {
-    if (!std::filesystem::exists(path_str, ec)) continue;
-    uintmax_t total_bytes = 0;
-    std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>>
-        files;
-    for (const auto& entry :
-         std::filesystem::recursive_directory_iterator(path_str, ec)) {
-      if (ec) break;
-      if (entry.is_regular_file(ec)) {
-        const auto size = entry.file_size(ec);
-        if (!ec) {
-          total_bytes += size;
-          files.emplace_back(entry.last_write_time(ec), entry.path());
-        }
-      }
-    }
-    if (total_bytes > kMaxStorageBytes) {
-      std::sort(files.begin(), files.end(),
-                [](const auto& a, const auto& b) { return a.first < b.first; });
-      for (const auto& file_info : files) {
-        if (total_bytes <= kMaxStorageBytes / 2) break;  // Prune down to 128 MB
-        const auto file_sz =
-            std::filesystem::file_size(file_info.second, ec);
-        if (!ec && std::filesystem::remove(file_info.second, ec)) {
-          total_bytes -= file_sz;
-        }
       }
     }
   }
@@ -343,43 +329,97 @@ void Install() {
             << g_path_mappings.size() << " prefix mappings)\n";
 }
 
-std::string TranslatePath(const std::string& android_path) {
-  const std::string* best_android_prefix = nullptr;
-  const std::string* best_host_prefix = nullptr;
-  for (const auto& [android_prefix, host_prefix] : g_path_mappings) {
-    if (PrefixMatchesPath(android_path, android_prefix) &&
-        (best_android_prefix == nullptr ||
-         android_prefix.size() > best_android_prefix->size())) {
-      best_android_prefix = &android_prefix;
-      best_host_prefix = &host_prefix;
+std::string TranslatePath(std::string_view android_path) {
+  if (android_path.empty()) {
+    return std::string();
+  }
+
+  // Linear scan through sorted list (longest prefixes first).
+  for (const auto& entry : g_sorted_mappings) {
+    if (PrefixMatchesPath(android_path, entry.android_prefix)) {
+      std::string result;
+      result.reserve(entry.host_prefix.size() + (android_path.size() - entry.android_prefix.size()));
+      result.append(entry.host_prefix);
+      result.append(android_path.data() + entry.android_prefix.size(),
+                    android_path.size() - entry.android_prefix.size());
+      return result;
     }
   }
-  if (best_android_prefix != nullptr && best_host_prefix != nullptr) {
-    return *best_host_prefix +
-           android_path.substr(best_android_prefix->size());
-  }
-  return android_path;
+
+  return std::string(android_path);
+}
+
+std::string TranslatePath(const std::string& android_path) {
+  return TranslatePath(std::string_view(android_path));
 }
 
 void RegisterPathMapping(const std::string& android_prefix,
                          const std::string& host_prefix) {
   g_path_mappings[android_prefix] = host_prefix;
+  RebuildSortedMappingsLocked();
 }
 
 void ClearPathMappings() {
   g_path_mappings.clear();
+  g_sorted_mappings.clear();
 }
 
 }  // namespace libc_shim
 
 namespace {
 
+// Fast-path check: returns true if path definitely refers to an unmapped host system path
+// that cannot match any registered Android prefix or relative asset directory.
+inline bool StartsWith(std::string_view str, std::string_view prefix) noexcept {
+  return str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0;
+}
+
+inline bool IsHostSystemPath(std::string_view path) noexcept {
+  if (path.empty() || path[0] != '/') {
+    return false;
+  }
+  // Android guest paths typically start with /data/, /sdcard/, /storage/, /system/, etc.
+  // Native Linux host subsystems never contain mocktail guest mappings.
+  return StartsWith(path, "/proc/") ||
+         StartsWith(path, "/sys/") ||
+         StartsWith(path, "/dev/") ||
+         StartsWith(path, "/etc/") ||
+         StartsWith(path, "/usr/") ||
+         StartsWith(path, "/lib") ||
+         StartsWith(path, "/var/") ||
+         StartsWith(path, "/home/") ||
+         StartsWith(path, "/tmp/");
+}
+
 const char* HostPath(const char* path, std::string* storage) {
   if (path == nullptr) {
     return nullptr;
   }
-  *storage = libc_shim::TranslatePath(path);
-  return storage->c_str();
+  if (path[0] == '\0') {
+    return path;
+  }
+
+  const std::string_view view(path);
+
+  // Fast path 1: Standard host system paths (/proc, /sys, /dev, etc.)
+  if (IsHostSystemPath(view)) {
+    return path;
+  }
+
+  // Fast path 2: Scan sorted mappings. If no prefix matches, zero allocation return.
+  for (const auto& entry : libc_shim::g_sorted_mappings) {
+    if (libc_shim::PrefixMatchesPath(view, entry.android_prefix)) {
+      storage->clear();
+      storage->reserve(entry.host_prefix.size() + (view.size() - entry.android_prefix.size()));
+      storage->append(entry.host_prefix);
+      storage->append(path + entry.android_prefix.size(),
+                      view.size() - entry.android_prefix.size());
+      return storage->c_str();
+    }
+  }
+
+  // No mapping matched; return original pointer without heap allocation.
+  return path;
 }
 
 bool PathTraceEnabled() {
@@ -415,19 +455,47 @@ void TracePathCallPtr(const char* name, const char* path,
 
 }  // namespace
 
+// Modern Linux open helper: attempts openat2 with RESOLVE_NO_MAGICLINKS
+// to prevent symlink traversal trickery in unprivileged user namespaces.
+inline int ModernLinuxOpen(const char* host_path, int flags, mode_t mode) {
+  if (host_path == nullptr) {
+    errno = EFAULT;
+    return -1;
+  }
+
+#if defined(__linux__) && defined(SYS_openat2) && defined(RESOLVE_NO_MAGICLINKS)
+  struct open_how how;
+  std::memset(&how, 0, sizeof(how));
+  how.flags = static_cast<__u64>(flags);
+  how.mode = static_cast<__u64>((flags & (O_CREAT | O_TMPFILE)) != 0 ? mode : 0);
+  how.resolve = RESOLVE_NO_MAGICLINKS;
+
+  const long res = ::syscall(SYS_openat2, AT_FDCWD, host_path, &how, sizeof(how));
+  if (res >= 0) {
+    return static_cast<int>(res);
+  }
+  if (errno != ENOSYS && errno != EPERM && errno != EINVAL) {
+    return -1;
+  }
+#endif
+
+  if ((flags & O_CREAT) != 0) {
+    return ::open(host_path, flags, mode);
+  }
+  return ::open(host_path, flags);
+}
+
 extern "C" int mocktail_open(const char* path, int flags, ...) {
   std::string translated;
   const char* host_path = HostPath(path, &translated);
-  int result = -1;
+  mode_t mode = 0;
   if ((flags & O_CREAT) != 0) {
     va_list args;
     va_start(args, flags);
-    mode_t mode = static_cast<mode_t>(va_arg(args, int));
+    mode = static_cast<mode_t>(va_arg(args, int));
     va_end(args);
-    result = ::open(host_path, flags, mode);
-  } else {
-    result = ::open(host_path, flags);
   }
+  const int result = ModernLinuxOpen(host_path, flags, mode);
   TracePathCall("open", path, host_path, result);
   return result;
 }
@@ -435,12 +503,8 @@ extern "C" int mocktail_open(const char* path, int flags, ...) {
 extern "C" int mocktail___open_2(const char* path, int flags) {
   std::string translated;
   const char* host_path = HostPath(path, &translated);
-  int result = -1;
-  if ((flags & O_CREAT) != 0) {
-    result = ::open(host_path, flags, 0600);
-  } else {
-    result = ::open(host_path, flags);
-  }
+  const mode_t mode = (flags & O_CREAT) != 0 ? 0600 : 0;
+  const int result = ModernLinuxOpen(host_path, flags, mode);
   TracePathCall("__open_2", path, host_path, result);
   return result;
 }
@@ -461,10 +525,57 @@ extern "C" int mocktail_access(const char* path, int mode) {
   return result;
 }
 
+// Modern Linux stat helper: queries kernel VFS with statx using AT_STATX_DONT_SYNC
+// to avoid forced filesystem/disk barrier flushes, reading directly from the page cache.
+inline int ModernLinuxStat(const char* host_path, struct stat* statbuf, int flags) {
+  if (host_path == nullptr || statbuf == nullptr) {
+    errno = EFAULT;
+    return -1;
+  }
+
+#if defined(__linux__) && defined(STATX_BASIC_STATS)
+  struct statx stx;
+  // Use AT_STATX_DONT_SYNC to read directly from kernel dcache/page cache
+  const int res = ::statx(AT_FDCWD, host_path, flags | AT_STATX_DONT_SYNC,
+                          STATX_BASIC_STATS, &stx);
+  if (res == 0) {
+    std::memset(statbuf, 0, sizeof(*statbuf));
+    statbuf->st_dev = ((static_cast<dev_t>(stx.stx_dev_major) << 8) |
+                       (stx.stx_dev_minor & 0xff));
+    statbuf->st_ino = static_cast<ino_t>(stx.stx_ino);
+    statbuf->st_mode = static_cast<mode_t>(stx.stx_mode);
+    statbuf->st_nlink = static_cast<nlink_t>(stx.stx_nlink);
+    statbuf->st_uid = static_cast<uid_t>(stx.stx_uid);
+    statbuf->st_gid = static_cast<gid_t>(stx.stx_gid);
+    statbuf->st_rdev = ((static_cast<dev_t>(stx.stx_rdev_major) << 8) |
+                        (stx.stx_rdev_minor & 0xff));
+    statbuf->st_size = static_cast<off_t>(stx.stx_size);
+    statbuf->st_blksize = static_cast<blksize_t>(stx.stx_blksize);
+    statbuf->st_blocks = static_cast<blkcnt_t>(stx.stx_blocks);
+    statbuf->st_atim.tv_sec = stx.stx_atime.tv_sec;
+    statbuf->st_atim.tv_nsec = stx.stx_atime.tv_nsec;
+    statbuf->st_mtim.tv_sec = stx.stx_mtime.tv_sec;
+    statbuf->st_mtim.tv_nsec = stx.stx_mtime.tv_nsec;
+    statbuf->st_ctim.tv_sec = stx.stx_ctime.tv_sec;
+    statbuf->st_ctim.tv_nsec = stx.stx_ctime.tv_nsec;
+    return 0;
+  }
+  // If statx is unsupported or rejected by older kernel/seccomp filter, fallback to legacy
+  if (errno != ENOSYS && errno != EPERM) {
+    return -1;
+  }
+#endif
+
+  if ((flags & AT_SYMLINK_NOFOLLOW) != 0) {
+    return ::lstat(host_path, statbuf);
+  }
+  return ::stat(host_path, statbuf);
+}
+
 extern "C" int mocktail_stat(const char* path, struct stat* statbuf) {
   std::string translated;
   const char* host_path = HostPath(path, &translated);
-  int result = ::stat(host_path, statbuf);
+  int result = ModernLinuxStat(host_path, statbuf, 0);
   TracePathCall("stat", path, host_path, result);
   return result;
 }
@@ -472,7 +583,7 @@ extern "C" int mocktail_stat(const char* path, struct stat* statbuf) {
 extern "C" int mocktail_lstat(const char* path, struct stat* statbuf) {
   std::string translated;
   const char* host_path = HostPath(path, &translated);
-  int result = ::lstat(host_path, statbuf);
+  int result = ModernLinuxStat(host_path, statbuf, AT_SYMLINK_NOFOLLOW);
   TracePathCall("lstat", path, host_path, result);
   return result;
 }

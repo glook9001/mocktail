@@ -52,6 +52,7 @@ const char* HostCaBundleStatusName(HostCaBundleStatus status);
 // Applies the longest matching Android-to-host path prefix. Unmapped paths are
 // returned unchanged.
 std::string TranslatePath(const std::string& android_path);
+std::string TranslatePath(std::string_view android_path);
 
 void RegisterPathMapping(const std::string& android_prefix,
                          const std::string& host_prefix);

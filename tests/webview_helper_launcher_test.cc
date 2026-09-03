@@ -310,10 +310,13 @@ TEST(WebViewHelperLauncherTest, SendsNormalizedInternalRouteToHelper) {
   ASSERT_TRUE(
       WriteExecutable(helper, "#!/bin/sh\ncat > '" + output.string() + "'\n"));
 
+  auto exit_probe = std::make_shared<ExitProbe>();
   const WebViewHelperLaunchResult result =
-      LaunchWebViewHelper(helper, "www:games/servers-section/987654321");
+      LaunchWebViewHelper(helper, "www:games/servers-section/987654321",
+                          WebViewHelperExitObserver{exit_probe, &RecordExit});
   ASSERT_TRUE(result) << result.error;
-  ASSERT_TRUE(WaitForFile(output, std::chrono::seconds(2)));
+  EXPECT_TRUE(WaitForExit(exit_probe, std::chrono::seconds(5)));
+  ASSERT_TRUE(WaitForFile(output, std::chrono::seconds(5)));
 
   std::ifstream input(output);
   const std::string request((std::istreambuf_iterator<char>(input)),

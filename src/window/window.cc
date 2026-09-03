@@ -449,9 +449,6 @@ VideoDriverChoice ResolveConfiguredVideoDriverChoice() {
       !StringEquals(GetEnvNonEmpty("MOCKTAIL_FORCE_WAYLAND"), "0");
   input.has_wayland_session = HasWaylandSession();
   input.has_x11_display = GetEnvNonEmpty("DISPLAY") != nullptr;
-  input.uses_direct_vulkan = ShouldUseNativeVulkanBackend();
-  input.has_nvidia_kernel_driver =
-      access("/proc/driver/nvidia/version", R_OK) == 0;
   return ResolveVideoDriverChoice(input);
 }
 
@@ -609,6 +606,8 @@ void ConfigureGraphicsBackendBeforeSDL() {
   SDL_SetHint(SDL_HINT_VIDEO_FORCE_EGL, "1");
   SDL_SetHint(SDL_HINT_THREAD_PRIORITY_POLICY, "1");
   SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
+  SDL_SetHint("SDL_MOUSE_RELATIVE_MODE_WARP", "0");
+  SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "0");
 
   if (ShouldUseAngleVulkanBackend() || ShouldUseNativeVulkanBackend()) {
     // Mesa's implicit device selector can crash in the Android Vulkan path;
@@ -624,11 +623,6 @@ void ConfigureGraphicsBackendBeforeSDL() {
     // Preserve any non-empty user override.
     setenv("SDL_VIDEODRIVER", video_driver, 1);
     SDL_SetHint(SDL_HINT_VIDEO_DRIVER, video_driver);
-  }
-  if (video_driver_choice == VideoDriverChoice::kNvidiaDirectVulkanX11) {
-    fprintf(stderr,
-            "  [window] NVIDIA direct Vulkan on Wayland session: using "
-            "X11/XWayland WSI; set SDL_VIDEODRIVER=wayland to override\n");
   }
 
   const char* egl_library = FindAngleLibrary(
@@ -2060,16 +2054,11 @@ bool PumpEvents() {
     }
   };
 
-  constexpr int kEventBatchSize = 16;
-  std::array<SDL_Event, kEventBatchSize> events;
-  int num_events = 0;
+  SDL_Event event;
   // Pump events immediately on every tick for zero-latency input ingestion.
   SDL_PumpEvents();
-  while ((num_events = SDL_PeepEvents(events.data(), kEventBatchSize,
-                                      SDL_GETEVENT, SDL_EVENT_FIRST,
-                                      SDL_EVENT_LAST)) > 0) {
-    for (int event_idx = 0; event_idx < num_events; ++event_idx) {
-      const SDL_Event& event = events[event_idx];
+  while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST,
+                        SDL_EVENT_LAST) > 0) {
     if (event.type != SDL_EVENT_MOUSE_MOTION) {
       flush_motion();
     }
@@ -2226,7 +2215,6 @@ bool PumpEvents() {
             g_text_input_owner != nullptr && g_text_input_owner->active())) {
       fprintf(stderr,
               "  [input] SDL right-button pointer capture update failed\n");
-    }
     }
   }
   flush_motion();

@@ -394,17 +394,8 @@ int mocktail_bionic_normal_mutex_lock(pthread_mutex_t* mutex, uint16_t shared) {
   if (mocktail_bionic_normal_mutex_trylock(state, shared) == 0) {
     return 0;
   }
-  // Adaptive spin: briefly spin using CPU pause instruction before falling back to futex wait.
-  for (int spin = 0; spin < 32; ++spin) {
-    if (mocktail_bionic_normal_mutex_trylock(state, shared) == 0) {
-      return 0;
-    }
-#if defined(__x86_64__) || defined(__i386__)
-    __builtin_ia32_pause();
-#elif defined(__aarch64__) || defined(__arm__)
-    asm volatile("yield" ::: "memory");
-#endif
-  }
+  // Park on the guest word. Do not CAS-spin: on dual-core / 4-thread chips,
+  // a spinning locker steals a worker/render core and stalls lock handoff.
   const uint16_t unlocked = static_cast<uint16_t>(shared | kBionicMutexUnlocked);
   const uint16_t contended =
       static_cast<uint16_t>(shared | kBionicMutexLockedContended);
@@ -464,29 +455,11 @@ int mocktail_bionic_owned_mutex_lock(pthread_mutex_t* mutex, uint16_t old_state)
 
   if (old_state == unlocked) {
     if (__atomic_compare_exchange_n(state, &old_state, locked_uncontended,
-                                    false, __ATOMIC_ACQUIRE,
-                                    __ATOMIC_RELAXED)) {
+                                     false, __ATOMIC_ACQUIRE,
+                                     __ATOMIC_RELAXED)) {
       __atomic_store_n(owner, tid, __ATOMIC_RELAXED);
       return 0;
     }
-  }
-
-  // Adaptive spin: briefly spin using CPU pause instruction before falling back to futex wait.
-  for (int spin = 0; spin < 32; ++spin) {
-    old_state = __atomic_load_n(state, __ATOMIC_RELAXED);
-    if (old_state == unlocked) {
-      if (__atomic_compare_exchange_n(state, &old_state, locked_uncontended,
-                                      false, __ATOMIC_ACQUIRE,
-                                      __ATOMIC_RELAXED)) {
-        __atomic_store_n(owner, tid, __ATOMIC_RELAXED);
-        return 0;
-      }
-    }
-#if defined(__x86_64__) || defined(__i386__)
-    __builtin_ia32_pause();
-#elif defined(__aarch64__) || defined(__arm__)
-    asm volatile("yield" ::: "memory");
-#endif
   }
 
   for (;;) {
