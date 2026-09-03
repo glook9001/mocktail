@@ -28,7 +28,10 @@ PresentModePolicy ResolvePresentModePolicy(std::string_view vsync_value,
   if (frame_rate_value == "unlimited") {
     return PresentModePolicy::kUnthrottled;
   }
-  // display, 30, 60, 120, 144, 240: cap the scheduler, keep vsync present.
+  if (frame_rate_value.empty() || frame_rate_value == "-1") {
+    return PresentModePolicy::kHostDefault;
+  }
+  // Display or any fixed scheduler target keeps synchronized presentation.
   return PresentModePolicy::kVsync;
 }
 
@@ -36,7 +39,7 @@ PresentModePolicy CachedPresentModePolicy() {
   static const PresentModePolicy policy = [] {
     return ResolvePresentModePolicy(
         EnvironmentOr("MOCKTAIL_VSYNC", "auto"),
-        EnvironmentOr("MOCKTAIL_FRAME_RATE_LIMIT", "display"));
+        EnvironmentOr("MOCKTAIL_FRAME_RATE_LIMIT", "-1"));
   }();
   return policy;
 }

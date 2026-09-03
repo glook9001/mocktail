@@ -959,7 +959,8 @@ int main(int argc, char* argv[]) {
               : -1;
       const mocktail::runtime::DesktopAppPolicyResult desktop_policy =
           mocktail::runtime::ApplyDesktopAppPolicy(
-              app_storage_file, default_app_policy, app_policy_user_id);
+              app_storage_file, default_app_policy, app_policy_user_id,
+              runtime_config.config.theme_mode());
       if (!desktop_policy) {
         std::cerr << "[FATAL] Desktop Roblox app-policy failed: "
                   << desktop_policy.error << '\n';

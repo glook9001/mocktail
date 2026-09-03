@@ -7,6 +7,8 @@ namespace graphics {
 namespace {
 
 TEST(PresentModePolicyTest, DerivesDisplayAndUnlimitedDefaults) {
+  EXPECT_EQ(ResolvePresentModePolicy("auto", "-1"),
+            PresentModePolicy::kHostDefault);
   EXPECT_EQ(ResolvePresentModePolicy("auto", "display"),
             PresentModePolicy::kVsync);
   EXPECT_EQ(ResolvePresentModePolicy("auto", "60"),
